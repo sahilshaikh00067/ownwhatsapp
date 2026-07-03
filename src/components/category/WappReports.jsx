@@ -126,6 +126,30 @@ const ExpandedRow = memo(({ entry, isAdmin }) => {
           <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 mb-3 text-center">
             <p className="text-orange-700 text-sm font-medium">⏳ Still pending — figures below may update once processing completes.</p>
           </div>
+
+          {(entry.media || []).filter(f => f?.type?.includes("image")).length > 0 && (
+            <div className="flex gap-2 flex-wrap mb-2">
+              {entry.media.filter(f => f?.type?.includes("image")).map((img, i) => (
+                <img key={i} src={`https://wa.cloudwhatsapp.in/uploads/${img.name}`}
+                  className="w-20 h-20 object-cover border rounded" alt="" />
+              ))}
+            </div>
+          )}
+
+          {(entry.media || []).filter(f => f?.type?.includes("video")).map((vid, i) => (
+            <video key={i} controls className="w-32 mr-2">
+              <source src={`https://wa.cloudwhatsapp.in/uploads/${vid.name}`} />
+            </video>
+          ))}
+
+          {(entry.media || []).filter(f => f?.type?.includes("pdf")).map((pdf, i) => (
+            <a key={i} href={`https://wa.cloudwhatsapp.in/uploads/${pdf.name}`}
+              target="_blank" rel="noreferrer"
+              className="inline-block bg-white border px-2 py-1 text-xs mr-2 mt-1">
+              📄 {pdf.name}
+            </a>
+          ))}
+
           <div className="flex gap-3 mt-3 flex-wrap">
             <span className="bg-[#20a8d8] text-white px-3 py-1 text-xs rounded">TOTAL {entry.total}</span>
             <span className="bg-[#20a8d8] text-white px-3 py-1 text-xs rounded">FAILED {entry.failed}</span>
@@ -146,7 +170,6 @@ const ExpandedRow = memo(({ entry, isAdmin }) => {
 
   return (
     <>
-
       {(entry.media || []).filter(f => f?.type?.includes("image")).length > 0 && (
         <div className="flex gap-2 flex-wrap mb-2">
           {entry.media.filter(f => f?.type?.includes("image")).map((img, i) => (
