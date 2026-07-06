@@ -4,8 +4,17 @@ import { useNavigate } from "react-router-dom";
 // ─────────────────────────────────────────────
 // CONSTANTS
 // ─────────────────────────────────────────────
-const API_URL  = "https://api.cloudwhatsapp.in/api/login/";
-const TIMEOUT  = 10_000;
+const API_URL     = "https://api.cloudwhatsapp.in/api/login/";
+// 🔥 FIX: 10s was too aggressive. On a shared 2GB VPS where Node.js
+// (whatsapp-web.js + Chromium sessions) is also running, gunicorn/Django
+// can genuinely take longer than 10s to respond under load — even though
+// the login view itself is just one DB query. Bumped to 30s so real
+// (slow-but-working) responses aren't killed prematurely.
+const TIMEOUT      = 30_000;
+// 🔥 FIX: one silent auto-retry before showing the user an error. Most
+// "timeouts" here are a single slow request, not a dead server — a retry
+// fixes it transparently without making the user re-click.
+const MAX_RETRIES  = 1;
 
 // ─────────────────────────────────────────────
 // HELPERS
@@ -14,6 +23,29 @@ function validate(username, password) {
   if (!username || username.length < 3) return "Username must be at least 3 characters";
   if (!password || password.length < 3) return "Password must be at least 3 characters";
   return null;
+}
+
+async function loginRequest(payload, attempt = 0) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT);
+
+  try {
+    const res = await fetch(API_URL, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify(payload),
+      signal:  controller.signal,
+    });
+    clearTimeout(timer);
+    return await res.json();
+  } catch (err) {
+    clearTimeout(timer);
+    // Retry once on timeout/network hiccup before giving up
+    if (attempt < MAX_RETRIES && (err.name === "AbortError" || err.name === "TypeError")) {
+      return loginRequest(payload, attempt + 1);
+    }
+    throw err;
+  }
 }
 
 // ─────────────────────────────────────────────
@@ -54,19 +86,7 @@ export default function Login() {
     setMessage("Logging in...");
 
     try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), TIMEOUT);
-
-      const res  = await fetch(API_URL, {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ username: trimUser, password: trimPass }),
-        signal:  controller.signal,
-      });
-
-      clearTimeout(timer);
-
-      const data = await res.json();
+      const data = await loginRequest({ username: trimUser, password: trimPass });
 
       if (data.status === "success") {
         sessionStorage.clear();
@@ -84,7 +104,7 @@ export default function Login() {
       }
     } catch (err) {
       setMessage(err.name === "AbortError"
-        ? "Request timed out. Please try again ❌"
+        ? "Server is taking too long to respond. Please try again ❌"
         : "Server error ❌"
       );
     }
