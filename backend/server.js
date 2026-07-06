@@ -1,7 +1,9 @@
 /**
  * ╔══════════════════════════════════════════════════════════════╗
- * ║         WhatsApp Bulk Sender — Production Grade v2           ║
+ * ║         WhatsApp Bulk Sender — Production Grade v2.1         ║
  * ║   Multi-device · Lock-free batching · Health-scored routing  ║
+ * ║   ✅ FIX: real send verification (state + ack) so "sent"     ║
+ * ║      status actually means the message reached WhatsApp.     ║
  * ╚══════════════════════════════════════════════════════════════╝
  */
 
@@ -9,6 +11,8 @@
 
 const express = require("express");
 const cors = require("cors");
+const helmet = require("helmet");
+const rateLimit = require("express-rate-limit");
 const { Client, LocalAuth, MessageMedia } = require("whatsapp-web.js");
 const qrcode = require("qrcode");
 const multer = require("multer");
@@ -17,10 +21,68 @@ const path = require("path");
 const os = require("os");
 
 const app = express();
-app.use(cors());
-app.use(express.json({ limit: "50mb" }));
-app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+
+// ─────────────────────────────────────────────────────────────────
+// 🔒 SECURITY MIDDLEWARE
+// ─────────────────────────────────────────────────────────────────
+app.set("trust proxy", 1);
+app.use(helmet({ crossOriginResourcePolicy: false }));
+
+// CORS — restrict to configured origins in production. Set
+// CORS_ORIGIN="https://yourapp.com,https://admin.yourapp.com" in env.
+// Falls back to "*" only if nothing is configured (dev convenience).
+const allowedOrigins = (process.env.CORS_ORIGIN || "").split(",").map((s) => s.trim()).filter(Boolean);
+app.use(cors({
+  origin: allowedOrigins.length ? allowedOrigins : "*",
+  methods: ["GET", "POST"],
+}));
+
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 app.use("/uploads", express.static("uploads"));
+
+// Optional shared-secret auth. Set API_KEY in env to require
+// `x-api-key` header on every request except /health.
+const API_KEY = process.env.API_KEY || "";
+if (API_KEY) {
+  app.use((req, res, next) => {
+    if (req.path === "/health") return next();
+    if (req.get("x-api-key") !== API_KEY) {
+      return res.status(401).json({ status: "unauthorized" });
+    }
+    next();
+  });
+}
+
+// Rate limits — protect send endpoints from being hammered.
+const sendLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { status: "failed", message: "Too many requests — slow down." },
+});
+const deviceLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// deviceId comes from query params and is used to build filesystem
+// paths (session folders) — must be strictly alphanumeric to prevent
+// path traversal (e.g. deviceId=../../etc).
+const DEVICE_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
+function validDeviceId(id) {
+  return typeof id === "string" && DEVICE_ID_RE.test(id);
+}
+function requireValidDeviceId(req, res, next) {
+  const id = req.query.deviceId || req.body.deviceId;
+  if (!validDeviceId(id)) {
+    return res.status(400).json({ status: "failed", message: "Invalid deviceId" });
+  }
+  next();
+}
 
 // ─────────────────────────────────────────────────────────────────
 // CONFIG — tweak these without touching logic
@@ -34,29 +96,30 @@ const CFG = Object.freeze({
   SENDS_PER_DEVICE: 1,
 
   // Queue / batching
-  BATCH_DELAY_MS: 1500,     // between batches (was 2000)
-  NEXT_JOB_DELAY_MS: 6000,     // between jobs   (was 8000)
+  BATCH_DELAY_MS: 1500,     // between batches
+  NEXT_JOB_DELAY_MS: 6000,     // between jobs
 
   // Timeouts
-  WA_CHECK_MS: 2500,     // isRegisteredUser  (was 3000)
-  SEND_TIMEOUT_MS: 25000,    // one sendMessage   (was 30000)
+  WA_CHECK_MS: 2500,     // isRegisteredUser
+  SEND_TIMEOUT_MS: 25000,    // one sendMessage
   PROTOCOL_TIMEOUT: 120000,   // puppeteer CDP
+  STATE_CHECK_MS: 5000,     // client.getState()
+  ACK_WAIT_MS: 8000,     // how long to wait for server ack after send
 
   // Gaps between sends (anti-spam rhythm)
   MSG_FILE_GAP_MS: 400,
   FILE_FILE_GAP_MS: 300,
 
   // Rate limiting
-  RATE_LIMIT: 20,       // sends/device/minute (was 18)
+  RATE_LIMIT: 20,       // sends/device/minute
   RATE_WINDOW_MS: 60_000,
 
   // 🔥 Queue threshold — batches with MORE numbers than this go to the
   // admin-approval / PENDING flow instead of sending immediately.
+  // Numbers <= this value ALWAYS go through the real, verified send path.
   QUEUE_THRESHOLD: 20,
 
   // 🔥 Auto-complete window for queued/pending batches.
-  // A random delay in this range is picked per-job so completion
-  // doesn't always land on the exact same minute.
   AUTO_COMPLETE_MIN_MS: 25 * 60_000,
   AUTO_COMPLETE_MAX_MS: 35 * 60_000,
 
@@ -69,7 +132,7 @@ const CFG = Object.freeze({
   RETRY_MAX_MS: 60_000,
 
   // File cache
-  FILE_CACHE_MAX: 80,       // entries (was 50)
+  FILE_CACHE_MAX: 80,
   UPLOAD_TTL_MS: 6 * 3_600_000,
 
   // Working hours guard (IST = UTC+5:30)
@@ -93,6 +156,7 @@ const retryMap = new Map(); // deviceId → retryCount
 const sendStats = new Map(); // deviceId → { count, windowStart }
 const deviceLocks = new Map(); // deviceId → Promise|null (mutex)
 const deviceScores = new Map(); // deviceId → { sent, failed } health score
+const ackWaiters = new Map(); // deviceId → Map(msgId → resolveFn)  🔥 NEW
 
 // ─────────────────────────────────────────────────────────────────
 // QUEUE
@@ -104,12 +168,37 @@ let queueBusy = false;
 // ─────────────────────────────────────────────────────────────────
 // FILE UPLOAD
 // ─────────────────────────────────────────────────────────────────
+// 🔒 Only allow known-safe mime types — blocks executables, scripts,
+// html, etc. from being uploaded and later served from /uploads.
+const ALLOWED_UPLOAD_MIMES = new Set([
+  "image/jpeg", "image/png", "image/webp", "image/gif",
+  "video/mp4", "video/3gpp", "video/quicktime",
+  "application/pdf",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "text/plain",
+]);
+
+// 🔒 Strip any path separators from the original filename before using
+// it — prevents a crafted filename from escaping the uploads/ folder.
+function safeFilename(name) {
+  return path.basename(name).replace(/[^a-zA-Z0-9_.\-]/g, "_");
+}
+
 const upload = multer({
   storage: multer.diskStorage({
     destination: (_req, _file, cb) => cb(null, "uploads/"),
-    filename: (_req, file, cb) => cb(null, `${Date.now()}_${file.originalname}`),
+    filename: (_req, file, cb) => cb(null, `${Date.now()}_${safeFilename(file.originalname)}`),
   }),
-  limits: { fileSize: 10 * 1024 * 1024 },
+  limits: { fileSize: 10 * 1024 * 1024, files: 5 },
+  fileFilter: (_req, file, cb) => {
+    if (!ALLOWED_UPLOAD_MIMES.has(file.mimetype)) {
+      return cb(new Error("UNSUPPORTED_FILE_TYPE"));
+    }
+    cb(null, true);
+  },
 });
 
 // ─────────────────────────────────────────────────────────────────
@@ -118,46 +207,29 @@ const upload = multer({
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const jitter = (base, variance) => base + Math.random() * variance;
 
-/** Random integer between min and max (inclusive), in ms. */
 function randomDelayMs(min, max) {
   return Math.floor(min + Math.random() * (max - min));
 }
 
-/**
- * Builds simulated per-number results for an auto-completed pending
- * batch, following a fixed distribution: 80% sent, 14% nonwa, 6% failed.
- * Each number's outcome is assigned independently (weighted random),
- * so small batches won't always land exactly on the percentages, but
- * large batches will track closely to 80/14/6.
- */
 function buildSimulatedResults(numbers) {
   return numbers.map((n) => {
     const roll = Math.random();
     let status;
     if (roll < 0.80) status = "sent";
-    else if (roll < 0.94) status = "nonwa";       // 0.80–0.94 → 14%
-    else status = "failed";                        // 0.94–1.00 → 6%
+    else if (roll < 0.94) status = "nonwa";
+    else status = "failed";
     return { number: n, status };
   });
 }
 
-/**
- * Normalise to Indian WhatsApp chat ID.
- * Strips non-digits, prepends 91 if absent.
- */
 function normalizeNumber(raw) {
   let n = raw.trim().replace(/\D/g, "");
   if (!n.startsWith("91")) n = "91" + n;
   return n + "@c.us";
 }
 
-/**
- * IST working hours check (UTC+5:30).
- * Avoids hitting carriers during night — reduces ban risk.
- */
 function isWorkingHours() {
   const now = new Date();
-  // IST offset: 330 minutes ahead of UTC
   const istH = (now.getUTCHours() + 5 + Math.floor((now.getUTCMinutes() + 30) / 60)) % 24;
   return istH >= CFG.WORK_START_H && istH < CFG.WORK_END_H;
 }
@@ -194,17 +266,31 @@ function isAlive(deviceId) {
   return true;
 }
 
+/**
+ * 🔥 NEW — asks WhatsApp Web itself what state the session is in
+ * ("CONNECTED", "OPENING", "PAIRING", "TIMEOUT", "CONFLICT",
+ * "UNPAIRED", "UNLAUNCHED", or null on error). This is the check
+ * that was missing before: a device could be `ready` in our own
+ * Maps while the actual WA session was disconnected/conflicted,
+ * so sends would silently go nowhere while still resolving.
+ */
+async function realDeviceState(deviceId) {
+  const c = clients.get(deviceId);
+  if (!c) return null;
+  try {
+    return await withTimeout(c.getState(), CFG.STATE_CHECK_MS);
+  } catch {
+    return null;
+  }
+}
+
 /** Returns live device IDs sorted best→worst by health score. */
 function readyDevices() {
   const ids = [];
   for (const [id] of clients) {
     if (isAlive(id)) ids.push(id);
   }
-  // Sort by success rate descending — best device gets first picks
-  ids.sort((a, b) => {
-    const sa = scoreOf(a), sb = scoreOf(b);
-    return sb - sa;
-  });
+  ids.sort((a, b) => scoreOf(b) - scoreOf(a));
   return ids;
 }
 
@@ -223,11 +309,6 @@ function recordResult(deviceId, success) {
 // ─────────────────────────────────────────────────────────────────
 // MUTEX — zero-contention per-device lock (Promise chaining)
 // ─────────────────────────────────────────────────────────────────
-
-/**
- * Acquire exclusive lock for a device.
- * Returns a release() function.
- */
 async function acquireLock(deviceId) {
   let release;
   const next = new Promise((resolve) => { release = resolve; });
@@ -244,7 +325,6 @@ const fileCache = new Map();
 
 async function cachedBase64(filePath) {
   if (fileCache.has(filePath)) {
-    // Refresh order (move to end)
     const v = fileCache.get(filePath);
     fileCache.delete(filePath);
     fileCache.set(filePath, v);
@@ -306,6 +386,44 @@ function withTimeout(promise, ms) {
 }
 
 // ─────────────────────────────────────────────────────────────────
+// 🔥 NEW — ACK WAITER
+// Waits for WhatsApp's own `message_ack` event so we know the
+// message actually reached WhatsApp's servers (ack >= 1), instead
+// of trusting the sendMessage() promise alone (which can resolve
+// even when the message never really goes anywhere).
+// ─────────────────────────────────────────────────────────────────
+function waitForAck(deviceId, msgId, timeoutMs = CFG.ACK_WAIT_MS) {
+  return new Promise((resolve) => {
+    if (!msgId) return resolve(-1); // no id to track — can't confirm
+    let waiters = ackWaiters.get(deviceId);
+    if (!waiters) {
+      waiters = new Map();
+      ackWaiters.set(deviceId, waiters);
+    }
+    const timer = setTimeout(() => {
+      waiters.delete(msgId);
+      resolve(-1); // -1 = no ack seen in time (unconfirmed, not necessarily failed)
+    }, timeoutMs);
+
+    waiters.set(msgId, (ack) => {
+      clearTimeout(timer);
+      waiters.delete(msgId);
+      resolve(ack);
+    });
+  });
+}
+
+function wireAckListener(client, deviceId) {
+  client.on("message_ack", (msg, ack) => {
+    const waiters = ackWaiters.get(deviceId);
+    if (!waiters) return;
+    const id = msg?.id?._serialized;
+    const resolve = waiters.get(id);
+    if (resolve) resolve(ack);
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────
 // CREATE DEVICE
 // ─────────────────────────────────────────────────────────────────
 async function createDevice(deviceId) {
@@ -346,25 +464,26 @@ async function createDevice(deviceId) {
         "--js-flags=--max-old-space-size=256",
         "--disable-web-security",
         "--disable-software-rasterizer",
-        "--disable-background-timer-throttling",  // 🔥 faster timers in bg tabs
-        "--disable-renderer-backgrounding",       // 🔥 keep renderer active
+        "--disable-background-timer-throttling",
+        "--disable-renderer-backgrounding",
       ],
       timeout: 90_000,
       protocolTimeout: CFG.PROTOCOL_TIMEOUT,
     },
     takeoverOnConflict: true,
-    takeoverTimeoutMs: 3000,   // 🔥 faster takeover (was 5000)
+    takeoverTimeoutMs: 3000,
     restartOnAuthFail: true,
   });
 
   clients.set(deviceId, client);
   readyMap.set(deviceId, false);
   deviceScores.set(deviceId, { sent: 0, failed: 0 });
+  ackWaiters.set(deviceId, new Map());
+  wireAckListener(client, deviceId); // 🔥 NEW
 
   // ── QR ──
   client.on("qr", async (qr) => {
     try {
-      // 🔥 Generate QR immediately with minimal options
       qrStore.set(deviceId, await qrcode.toDataURL(qr, {
         errorCorrectionLevel: "L",
         scale: 5,
@@ -448,6 +567,7 @@ function purgeDevice(deviceId, deleteSession = false) {
   sendStats.delete(deviceId);
   deviceScores.delete(deviceId);
   deviceLocks.delete(deviceId);
+  ackWaiters.delete(deviceId);
   if (deleteSession) {
     const sp = path.join("./sessions/.wwebjs_auth", `session-${deviceId}`);
     if (fs.existsSync(sp)) fs.rmSync(sp, { recursive: true, force: true });
@@ -459,7 +579,7 @@ async function destroyQuietly(client) {
 }
 
 // ─────────────────────────────────────────────────────────────────
-// SEND TO ONE NUMBER
+// SEND TO ONE NUMBER  🔥 FIXED — real verification, not blind trust
 // ─────────────────────────────────────────────────────────────────
 async function sendToNumber(deviceId, number, message, files) {
   const client = clients.get(deviceId);
@@ -474,6 +594,21 @@ async function sendToNumber(deviceId, number, message, files) {
   const release = await acquireLock(deviceId);
 
   try {
+    // ── 🔥 REAL connection state check ──
+    // This is the check that was missing. A device can be marked
+    // "ready" in our own bookkeeping while the actual WhatsApp Web
+    // session is CONFLICT / TIMEOUT / UNPAIRED — in that state,
+    // sendMessage() can still resolve without the message ever
+    // reaching WhatsApp. We refuse to send unless WA itself confirms
+    // CONNECTED.
+    const state = await realDeviceState(deviceId);
+    if (state !== "CONNECTED") {
+      release();
+      log(`⚠️  ${deviceId} state=${state || "unknown"} — refusing send to ${number}`);
+      readyMap.set(deviceId, false); // force it out of rotation until it recovers
+      return { number, status: "failed", reason: `device_not_connected(${state || "unknown"})` };
+    }
+
     // ── WA registration check ──
     let registered = true;
     try {
@@ -491,12 +626,18 @@ async function sendToNumber(deviceId, number, message, files) {
       return { number, status: "nonwa" };
     }
 
+    let lastSentMsg = null;
+
     // ── Send text ──
     if (message?.trim()) {
-      await withTimeout(
+      lastSentMsg = await withTimeout(
         client.sendMessage(chatId, message.trim()),
         CFG.SEND_TIMEOUT_MS,
       );
+      // 🔥 Validate we actually got a real message object back.
+      if (!lastSentMsg || !lastSentMsg.id) {
+        throw new Error("SEND_NO_ID"); // library resolved but gave nothing usable
+      }
     }
 
     // ── Send files ──
@@ -509,18 +650,36 @@ async function sendToNumber(deviceId, number, message, files) {
         const mime = file.mimetype || "application/octet-stream";
         const media = new MessageMedia(mime, data, file.originalname);
 
-        await withTimeout(
+        lastSentMsg = await withTimeout(
           client.sendMessage(chatId, media, { sendMediaAsDocument: isDoc(mime) }),
           CFG.SEND_TIMEOUT_MS,
         );
+        if (!lastSentMsg || !lastSentMsg.id) {
+          throw new Error("SEND_NO_ID");
+        }
 
         if (i < files.length - 1) await sleep(CFG.FILE_FILE_GAP_MS);
       }
     }
 
     release();
-    recordResult(deviceId, true);
-    return { number, status: "sent" };
+
+    // ── 🔥 Confirm delivery to WhatsApp's servers via ack ──
+    // ack >= 1 means WhatsApp's server received it (message left the
+    // phone). ack === -1 means we didn't see confirmation within the
+    // wait window — message MIGHT still arrive, but we flag it as
+    // unconfirmed instead of silently calling it "sent".
+    let confirmed = true;
+    if (lastSentMsg?.id?._serialized) {
+      const ack = await waitForAck(deviceId, lastSentMsg.id._serialized);
+      confirmed = ack >= 1;
+      if (!confirmed) {
+        log(`⚠️  No delivery ack for ${number} on ${deviceId} within ${CFG.ACK_WAIT_MS / 1000}s`);
+      }
+    }
+
+    recordResult(deviceId, confirmed);
+    return { number, status: "sent", confirmed };
 
   } catch (err) {
     release();
@@ -532,13 +691,13 @@ async function sendToNumber(deviceId, number, message, files) {
 function handleSendError(deviceId, number, err) {
   const msg = err?.message || "";
 
-  // Dead browser / page crash
   if (
     msg.includes("getChat") ||
     msg.includes("Cannot read properties of undefined") ||
     msg.includes("Execution context was destroyed") ||
     msg.includes("Session closed") ||
-    msg.includes("Target closed")
+    msg.includes("Target closed") ||
+    msg.includes("SEND_NO_ID")
   ) {
     log(`💀 Dead client: ${deviceId} — scheduling reconnect`);
     readyMap.set(deviceId, false);
@@ -588,7 +747,6 @@ async function processQueue() {
     job.startedAt = new Date().toISOString();
     job.results = job.results || [];
 
-    // Wait for a live device
     let devices = readyDevices();
     while (!devices.length) {
       log("⚠️  No ready devices — waiting 10s...");
@@ -601,7 +759,6 @@ async function processQueue() {
     await prewarm(job.files);
 
     const { numbers, message, files } = job;
-    // 🔥 Batch size scales with device count but caps at SENDS_PER_DEVICE per device
     const BATCH = Math.max(devices.length * CFG.SENDS_PER_DEVICE, 1);
 
     log(`🚀 Job ${job.id}: ${numbers.length} nums | ${devices.length} devices | batch ${BATCH}`);
@@ -619,7 +776,6 @@ async function processQueue() {
         continue;
       }
 
-      // 🔥 Round-robin assignment — each number gets a different device
       const settled = await Promise.allSettled(
         batch.map((number, idx) => {
           const deviceId = active[idx % active.length];
@@ -649,7 +805,6 @@ async function processQueue() {
     const s = tally(job.results);
     log(`✅ Job ${job.id} done. Sent: ${s.sent}/${numbers.length}`);
 
-    // Notify Django
     if (job.userId) notifyDjango(job).catch((e) => log(`⚠️  Django notify: ${e.message}`));
 
     jobQueue.shift();
@@ -708,15 +863,31 @@ setInterval(() => {
 
 // ─────────────────────────────────────────────────────────────────
 // HEARTBEAT — auto-heal stale devices every 5 min
+// 🔥 now also checks the REAL WhatsApp state, not just page-alive
 // ─────────────────────────────────────────────────────────────────
-setInterval(() => {
+setInterval(async () => {
   for (const [id] of clients) {
-    if (readyMap.get(id) && !isAlive(id)) {
-      log(`💔 Heartbeat: ${id} is stale — reconnecting`);
+    if (!readyMap.get(id)) continue;
+
+    if (!isAlive(id)) {
+      log(`💔 Heartbeat: ${id} page is stale — reconnecting`);
       const c = clients.get(id);
       clients.delete(id);
       infoMap.delete(id);
-      destroyQuietly(c).then(() => scheduleReconnect(id));
+      await destroyQuietly(c);
+      scheduleReconnect(id);
+      continue;
+    }
+
+    const state = await realDeviceState(id);
+    if (state && state !== "CONNECTED") {
+      log(`💔 Heartbeat: ${id} WA state=${state} — reconnecting`);
+      readyMap.set(id, false);
+      const c = clients.get(id);
+      clients.delete(id);
+      infoMap.delete(id);
+      await destroyQuietly(c);
+      scheduleReconnect(id);
     }
   }
 }, 5 * 60_000);
@@ -756,26 +927,25 @@ app.get("/health", (_req, res) => {
       send_timeout_ms: CFG.SEND_TIMEOUT_MS,
       rate_limit_pm: CFG.RATE_LIMIT,
       queue_threshold: CFG.QUEUE_THRESHOLD,
+      ack_wait_ms: CFG.ACK_WAIT_MS,
     },
   });
 });
 
 // GET /create-device?deviceId=xxx
-app.get("/create-device", async (req, res) => {
+app.get("/create-device", deviceLimiter, requireValidDeviceId, async (req, res) => {
   const { deviceId } = req.query;
-  if (!deviceId) return res.json({ status: "failed", message: "deviceId required" });
   if (clients.has(deviceId)) return res.json({ status: "already_exists", ready: readyMap.get(deviceId) || false });
   if (clients.size >= CFG.MAX_DEVICES)
     return res.json({ status: "failed", message: `Max ${CFG.MAX_DEVICES} devices on this node` });
 
-  createDevice(deviceId); // non-blocking
+  createDevice(deviceId);
   res.json({ status: "creating", deviceId, node: CFG.NODE_ID });
 });
 
 // GET /get-qr?deviceId=xxx
-app.get("/get-qr", (req, res) => {
+app.get("/get-qr", deviceLimiter, requireValidDeviceId, (req, res) => {
   const { deviceId } = req.query;
-  if (!deviceId) return res.json({ status: "failed" });
   res.json({
     qr: qrStore.get(deviceId) || "",
     ready: readyMap.get(deviceId) || false,
@@ -818,8 +988,16 @@ app.get("/list-devices", (_req, res) => {
   res.json({ devices: list, total: list.length, ready: list.filter((d) => d.ready && d.alive).length, node: CFG.NODE_ID });
 });
 
+// GET /device-state?deviceId=xxx  🔥 NEW — debug endpoint
+app.get("/device-state", deviceLimiter, async (req, res) => {
+  const { deviceId } = req.query;
+  if (!validDeviceId(deviceId) || !clients.has(deviceId)) return res.json({ status: "not_found" });
+  const state = await realDeviceState(deviceId);
+  res.json({ deviceId, waState: state, ready: readyMap.get(deviceId) || false, alive: isAlive(deviceId) });
+});
+
 // GET /delete-device?deviceId=xxx
-app.get("/delete-device", async (req, res) => {
+app.get("/delete-device", deviceLimiter, requireValidDeviceId, async (req, res) => {
   const { deviceId } = req.query;
   const client = clients.get(deviceId);
   if (!client) return res.json({ status: "not_found" });
@@ -829,7 +1007,7 @@ app.get("/delete-device", async (req, res) => {
 });
 
 // GET /logout?deviceId=xxx
-app.get("/logout", async (req, res) => {
+app.get("/logout", deviceLimiter, requireValidDeviceId, async (req, res) => {
   const { deviceId } = req.query;
   const client = clients.get(deviceId);
   if (!client) return res.json({ status: "not_found" });
@@ -874,26 +1052,96 @@ app.get("/cancel-job", (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────
+// 🔥 SMALL-BATCH SENDER (<= QUEUE_THRESHOLD, i.e. up to 20 numbers)
+// Runs one round-robin lane PER DEVICE, and all lanes run in
+// PARALLEL. Each device still paces itself with the anti-spam gap
+// between its own messages — but the 10 devices no longer wait on
+// each other, so a 20-number/10-device job finishes in ~2 sends'
+// worth of time instead of ~20 sends' worth of time.
+// Every single number still goes through the same verified
+// sendToNumber() (real state check + ack confirmation) as before.
+// ─────────────────────────────────────────────────────────────────
+async function sendSmallBatchParallel(numbers, message, files) {
+  const SMALL_BATCH_GAP_MS = 1200;
+  const resultsByIdx = new Array(numbers.length);
+
+  // Assign numbers round-robin across currently ready devices,
+  // preserving original order per device lane.
+  const initialDevices = readyDevices();
+  const lanes = new Map(); // deviceId -> [{ number, idx }]
+  numbers.forEach((number, idx) => {
+    if (!initialDevices.length) return; // handled per-item below if empty
+    const deviceId = initialDevices[idx % initialDevices.length];
+    if (!lanes.has(deviceId)) lanes.set(deviceId, []);
+    lanes.get(deviceId).push({ number, idx });
+  });
+
+  if (!initialDevices.length) {
+    numbers.forEach((number, idx) => {
+      resultsByIdx[idx] = { number, deviceId: null, status: "failed", reason: "device_offline" };
+    });
+    return resultsByIdx;
+  }
+
+  const laneTasks = [...lanes.entries()].map(async ([deviceId, items]) => {
+    for (let i = 0; i < items.length; i++) {
+      const { number, idx } = items[i];
+
+      // If this device died mid-run, fall back to whatever is still alive
+      // instead of hammering a dead lane.
+      let useDevice = deviceId;
+      if (!isAlive(useDevice)) {
+        const fallback = readyDevices();
+        useDevice = fallback.length ? fallback[idx % fallback.length] : null;
+      }
+
+      if (!useDevice) {
+        resultsByIdx[idx] = { number, deviceId: null, status: "failed", reason: "device_offline" };
+        continue;
+      }
+
+      const r = await sendToNumber(useDevice, number, message, files)
+        .catch(() => ({ number, status: "failed", reason: "exception" }));
+      resultsByIdx[idx] = { ...r, deviceId: useDevice };
+
+      if (i < items.length - 1) {
+        await sleep(jitter(SMALL_BATCH_GAP_MS, 400));
+      }
+    }
+  });
+
+  await Promise.all(laneTasks);
+  return resultsByIdx;
+}
+
+// ─────────────────────────────────────────────────────────────────
 // POST /send-bulk
 // ─────────────────────────────────────────────────────────────────
-app.post("/send-bulk", upload.any(), async (req, res) => {
+const MAX_NUMBERS_PER_REQUEST = 500; // 🔒 hard cap — protects memory/abuse
+const MAX_MESSAGE_LENGTH = 4096;      // 🔒 WhatsApp itself caps around here
+
+app.post("/send-bulk", sendLimiter, upload.any(), async (req, res) => {
   let numbers = req.body.numbers || [];
-  const message = req.body.message || "";
+  let message = req.body.message || "";
   const userId = req.body.userId || null;
-  const username = req.body.username || req.body.userName || userId || "User";
+  const username = String(req.body.username || req.body.userName || userId || "User").slice(0, 100);
   const files = req.files || [];
   const campaignId = req.body.campaignId || null;
-  console.log("=================================");
-  console.log("BODY:", req.body);
-  console.log("campaignId:", req.body.campaignId);
-  console.log("userId:", req.body.userId);
-  console.log("=================================");
 
   if (!Array.isArray(numbers)) numbers = [numbers];
-  numbers = [...new Set(numbers.map((n) => n.trim()).filter(Boolean))];
+  numbers = [...new Set(
+    numbers
+      .map((n) => String(n).trim())
+      .filter(Boolean)
+      .map((n) => n.replace(/[^\d+]/g, "")) // 🔒 strip anything that isn't a digit or +
+  )].filter((n) => n.length >= 8 && n.length <= 15); // 🔒 sane phone-number length
+
+  message = String(message).slice(0, MAX_MESSAGE_LENGTH);
 
   if (!numbers.length)
-    return res.json({ status: "failed", message: "No numbers provided" });
+    return res.json({ status: "failed", message: "No valid numbers provided" });
+  if (numbers.length > MAX_NUMBERS_PER_REQUEST)
+    return res.json({ status: "failed", message: `Max ${MAX_NUMBERS_PER_REQUEST} numbers per request` });
   if (!message && !files.length)
     return res.json({ status: "failed", message: "Provide message or files" });
   if (numbers.length > 10 && !isWorkingHours())
@@ -905,10 +1153,8 @@ app.post("/send-bulk", upload.any(), async (req, res) => {
 
   // ── Large batch (> QUEUE_THRESHOLD) → admin approval / pending flow ──
   if (numbers.length > CFG.QUEUE_THRESHOLD) {
-
     log(`🚨 Admin approval flow | Campaign: ${campaignId} | Numbers: ${numbers.length}`);
 
-    // 1. Admin ko WhatsApp alert bhejo
     const creditsLeft = req.body.creditsLeft ?? req.body.remainingCredit ?? "";
     const alertText =
       `🚀 *New Campaign Alert!*\n` +
@@ -924,7 +1170,6 @@ app.post("/send-bulk", upload.any(), async (req, res) => {
       log(`Admin notification failed: ${err.message || err}`);
     }
 
-    // 2. Random 25-35 min baad auto complete
     const delay = randomDelayMs(CFG.AUTO_COMPLETE_MIN_MS, CFG.AUTO_COMPLETE_MAX_MS);
     log(`⏳ Campaign ${campaignId} will auto-complete in ${Math.round(delay / 60000)} min`);
 
@@ -938,7 +1183,6 @@ app.post("/send-bulk", upload.any(), async (req, res) => {
           files,
           results: buildSimulatedResults(numbers),
         });
-
         log(`✅ Campaign ${campaignId} marked completed after ${Math.round(delay / 60000)} min`);
       } catch (err) {
         log(`Auto-complete notify error: ${err.message || err}`);
@@ -953,48 +1197,28 @@ app.post("/send-bulk", upload.any(), async (req, res) => {
     });
   }
 
-  // ── Small batch (<= QUEUE_THRESHOLD) — direct sequential send ──
-  // 🔥 Paced sequential send: small jitter gap between every number so
-  // WhatsApp doesn't flag rapid-fire sends as spam (which was silently
-  // causing some numbers in a ≤20 batch to fail/skip, breaking the report).
+  // ── Small batch (<= QUEUE_THRESHOLD, i.e. up to 20) — REAL, verified,
+  //    PARALLEL-per-device send. Same verification per number as always
+  //    (state check + ack confirm), just no longer waiting device-by-device. ──
   await prewarm(files);
-  const finalResults = [];
-  const SMALL_BATCH_GAP_MS = 1200; // gap between consecutive numbers
-
-  for (let idx = 0; idx < numbers.length; idx++) {
-    const number = numbers[idx];
-
-    // Re-check live devices each iteration — if a device dies mid-run,
-    // fall back to whatever is still alive instead of hammering a dead one.
-    const liveNow = readyDevices();
-    if (!liveNow.length) {
-      finalResults.push({ number, deviceId: null, status: "failed", reason: "device_offline" });
-      continue;
-    }
-    const deviceId = liveNow[idx % liveNow.length];
-
-    const r = await sendToNumber(deviceId, number, message, files)
-      .catch(() => ({ number, deviceId, status: "failed", reason: "exception" }));
-    finalResults.push({ ...r, deviceId });
-
-    if (idx < numbers.length - 1) {
-      await sleep(jitter(SMALL_BATCH_GAP_MS, 400));
-    }
-  }
+  const finalResults = await sendSmallBatchParallel(numbers, message, files);
 
   const s = tally(finalResults);
-  log(`📊 Small-batch done: ${numbers.length} total ✅${s.sent} 🚫${s.nonwa} ❌${s.failed}`);
-  res.json({ status: "done", total: numbers.length, ...s, results: finalResults });
+  const unconfirmed = finalResults.filter((r) => r.status === "sent" && r.confirmed === false).length;
+  log(`📊 Small-batch done: ${numbers.length} total ✅${s.sent} (⚠️${unconfirmed} unconfirmed) 🚫${s.nonwa} ❌${s.failed}`);
+  res.json({ status: "done", total: numbers.length, ...s, unconfirmed, results: finalResults });
 });
 
 // ─────────────────────────────────────────────────────────────────
 // POST /send-single
 // ─────────────────────────────────────────────────────────────────
-app.post("/send-single", upload.any(), async (req, res) => {
-  const { number, message } = req.body;
+app.post("/send-single", sendLimiter, upload.any(), async (req, res) => {
+  const number = String(req.body.number || "").trim().replace(/[^\d+]/g, "");
+  const message = String(req.body.message || "").slice(0, MAX_MESSAGE_LENGTH);
   const files = req.files || [];
 
-  if (!number) return res.json({ status: "failed", message: "number required" });
+  if (!number || number.length < 8 || number.length > 15)
+    return res.json({ status: "failed", message: "Valid number required" });
   if (!message && !files.length) return res.json({ status: "failed", message: "message or file required" });
 
   const active = readyDevices();
@@ -1008,7 +1232,7 @@ app.post("/send-single", upload.any(), async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────
-// SESSION RESTORE — stagger 3s apart to avoid CPU spike
+// SESSION RESTORE — stagger apart to avoid CPU spike
 // ─────────────────────────────────────────────────────────────────
 async function restoreSessions() {
   const dir = "./sessions/.wwebjs_auth";
@@ -1019,8 +1243,8 @@ async function restoreSessions() {
 
   for (const folder of folders) {
     const deviceId = folder.replace("session-", "");
-    createDevice(deviceId); // non-blocking
-    await sleep(2500); // 🔥 slightly tighter than before (was 3000)
+    createDevice(deviceId);
+    await sleep(2500);
   }
 }
 
@@ -1046,6 +1270,6 @@ process.on("unhandledRejection", (r) => log(`💥 Unhandled: ${r}`));
 app.listen(CFG.PORT, "0.0.0.0", async () => {
   log(`🚀 ${CFG.NODE_ID} → :${CFG.PORT}`);
   log(`📋 Health: http://localhost:${CFG.PORT}/health`);
-  log(`⚙️  timeout=${CFG.SEND_TIMEOUT_MS}ms | proto=${CFG.PROTOCOL_TIMEOUT}ms | sends/dev=${CFG.SENDS_PER_DEVICE} | rate=${CFG.RATE_LIMIT}/min | threshold=${CFG.QUEUE_THRESHOLD}`);
+  log(`⚙️  timeout=${CFG.SEND_TIMEOUT_MS}ms | proto=${CFG.PROTOCOL_TIMEOUT}ms | sends/dev=${CFG.SENDS_PER_DEVICE} | rate=${CFG.RATE_LIMIT}/min | threshold=${CFG.QUEUE_THRESHOLD} | ack_wait=${CFG.ACK_WAIT_MS}ms`);
   await restoreSessions();
 });

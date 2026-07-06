@@ -16,7 +16,7 @@ const MODAL_STYLES = {
   success: { emoji: "🚀", bg: "from-green-500 to-emerald-600", border: "border-green-200", text: "text-green-700", light: "bg-green-50" },
   error: { emoji: "❌", bg: "from-red-500 to-rose-600", border: "border-red-200", text: "text-red-700", light: "bg-red-50" },
   warning: { emoji: "⚠️", bg: "from-orange-400 to-orange-500", border: "border-orange-200", text: "text-orange-700", light: "bg-orange-50" },
-  info: { emoji: "⏳", bg: "from-blue-500 to-blue-600", border: "border-blue-200", text: "text-blue-700", light: "bg-blue-50" },
+  info: { emoji: "⏳", bg: "from-green-500 to-green-600", border: "border-green-200", text: "text-green-700", light: "bg-green-50" },
 };
 
 const Modal = memo(({ modal, onClose }) => {
@@ -44,23 +44,27 @@ const Modal = memo(({ modal, onClose }) => {
 });
 
 const MODAL_CSS = `
-  .modal-overlay{position:fixed;inset:0;z-index:100;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.55);backdrop-filter:blur(4px);animation:fadeIn .18s ease}
-  .modal-box{background:#fff;border-radius:20px;box-shadow:0 25px 60px rgba(0,0,0,.18);width:92%;max-width:400px;padding:32px 28px 28px;text-align:center;animation:slideUp .22s cubic-bezier(.4,0,.2,1)}
-  .modal-icon-circle{width:62px;height:62px;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 16px;box-shadow:0 6px 20px rgba(0,0,0,.15)}
+  .modal-overlay{position:fixed;inset:0;z-index:100;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.55);backdrop-filter:blur(4px);animation:fadeIn .22s ease}
+  .modal-box{background:#fff;border-radius:20px;box-shadow:0 25px 60px rgba(0,0,0,.18);width:92%;max-width:400px;padding:32px 28px 28px;text-align:center;animation:slideUp .3s cubic-bezier(.16,1,.3,1)}
+  .modal-icon-circle{width:62px;height:62px;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 16px;box-shadow:0 6px 20px rgba(0,0,0,.15);transition:transform .2s ease}
   .modal-emoji{font-size:26px;line-height:1}
   .modal-title{font-size:18px;font-weight:700;color:#1f2937;margin-bottom:12px;line-height:1.4}
   .modal-body-box{border-radius:10px;border:1px solid;padding:12px 14px;font-size:14px;line-height:1.6;margin-bottom:20px;text-align:left;white-space:pre-line}
-  .modal-close-btn{color:#fff;border:none;cursor:pointer;padding:10px 36px;border-radius:10px;font-size:15px;font-weight:600;box-shadow:0 4px 12px rgba(0,0,0,.15);transition:opacity .15s,transform .15s}
-  .modal-close-btn:hover{opacity:.9;transform:scale(1.04)}
+  .modal-close-btn{color:#fff;border:none;cursor:pointer;padding:10px 36px;border-radius:10px;font-size:15px;font-weight:600;box-shadow:0 4px 12px rgba(0,0,0,.15);transition:opacity .2s ease,transform .2s cubic-bezier(.4,0,.2,1),box-shadow .2s ease}
+  .modal-close-btn:hover{opacity:.92;transform:scale(1.04);box-shadow:0 6px 16px rgba(0,0,0,.2)}
+  .modal-close-btn:active{transform:scale(.98)}
   @keyframes fadeIn{from{opacity:0}to{opacity:1}}
-  @keyframes slideUp{from{transform:translateY(30px);opacity:0}to{transform:translateY(0);opacity:1}}
+  @keyframes slideUp{from{transform:translateY(24px) scale(.97);opacity:0}to{transform:translateY(0) scale(1);opacity:1}}
+
+  .confirm-overlay{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.6);backdrop-filter:blur(4px);animation:fadeIn .2s ease}
+  .confirm-box{background:#fff;border-radius:16px;box-shadow:0 25px 50px rgba(0,0,0,.25);width:92%;max-width:380px;padding:24px;text-align:center;animation:slideUp .3s cubic-bezier(.16,1,.3,1)}
 `;
 
 // ─────────────────────────────────────────────
 // UPLOAD BOX — memoized with stable setter refs
 // ─────────────────────────────────────────────
 const UploadBox = memo(({ title, type, color, images, video, pdf, setImages, setVideo, setPdf }) => {
-  const { getRootProps, getInputProps } = useDropzone({
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
     accept:
       type === "image" ? { "image/*": [] }
         : type === "video" ? { "video/*": [] }
@@ -80,28 +84,48 @@ const UploadBox = memo(({ title, type, color, images, video, pdf, setImages, set
   }, [setImages]);
 
   return (
-    <div className="border border-gray-300 rounded overflow-hidden">
+    <div className="border border-gray-300 rounded overflow-hidden transition-shadow duration-200 hover:shadow-md">
       <div className={`${color} text-white px-4 py-2 text-[13px] font-semibold`}>{title}</div>
-      <div {...getRootProps()} className="bg-gray-100 text-gray-600 text-center p-3 min-h-[120px] cursor-pointer hover:bg-gray-200 transition">
+      <div
+        {...getRootProps()}
+        className={`bg-gray-100 text-gray-600 text-center p-3 min-h-[120px] cursor-pointer transition-colors duration-200 ${
+          isDragActive ? "bg-gray-200" : "hover:bg-gray-200"
+        }`}
+      >
         <input {...getInputProps()} />
         {type === "image" && images.length > 0 ? (
           <div className="flex gap-2 flex-wrap justify-center">
             {images.map((img, i) => (
-              <div key={i} className="relative">
+              <div key={i} className="relative group transition-transform duration-150 hover:scale-105">
                 <img src={URL.createObjectURL(img)} alt="" className="w-16 h-16 object-cover border rounded" />
-                <button onClick={(e) => removeImage(i, e)} className="absolute top-0 right-0 bg-red-500 text-white text-xs px-1">✕</button>
+                <button
+                  onClick={(e) => removeImage(i, e)}
+                  className="absolute top-0 right-0 bg-red-500 text-white text-xs px-1 rounded-bl transition-colors duration-150 hover:bg-red-600"
+                >
+                  ✕
+                </button>
               </div>
             ))}
           </div>
         ) : type === "video" && video ? (
           <div>
-            <video src={URL.createObjectURL(video)} className="w-28 mx-auto" controls />
-            <button onClick={(e) => { e.stopPropagation(); setVideo(null); }} className="mt-1 text-red-500 text-xs underline block mx-auto">Remove</button>
+            <video src={URL.createObjectURL(video)} className="w-28 mx-auto rounded" controls />
+            <button
+              onClick={(e) => { e.stopPropagation(); setVideo(null); }}
+              className="mt-1 text-red-500 text-xs underline block mx-auto transition-colors duration-150 hover:text-red-700"
+            >
+              Remove
+            </button>
           </div>
         ) : type === "pdf" && pdf ? (
           <div>
             <p className="text-sm">📄 {pdf.name}</p>
-            <button onClick={(e) => { e.stopPropagation(); setPdf(null); }} className="mt-1 text-red-500 text-xs underline">Remove</button>
+            <button
+              onClick={(e) => { e.stopPropagation(); setPdf(null); }}
+              className="mt-1 text-red-500 text-xs underline transition-colors duration-150 hover:text-red-700"
+            >
+              Remove
+            </button>
           </div>
         ) : (
           <>Drag & Drop {type} files<br />or <span className="underline">Browse {type}</span></>
@@ -126,14 +150,6 @@ function buildFilesData(images, video, pdf) {
   ];
 }
 
-function tallyResults(results = []) {
-  return {
-    sent: results.filter((r) => r.status === "sent").length,
-    failed: results.filter((r) => r.status === "failed").length,
-    nonwa: results.filter((r) => r.status === "nonwa").length,
-  };
-}
-
 async function safeFetch(url, opts = {}) {
   const res = await fetch(url, opts);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -143,11 +159,12 @@ async function safeFetch(url, opts = {}) {
 /**
  * Cleans, validates, and deduplicates a raw numbers textarea value.
  * - Strips all non-digit characters (spaces, dashes, +, parens, etc.)
- * - Drops a leading "91" country code if present, so "919876543210"
- *   and "9876543210" are treated as the same 10-digit number.
+ * - Drops a leading "91" country code whenever the cleaned digit
+ *   string is 12 digits long, so "919876543210" and "9876543210"
+ *   both resolve to the same 10-digit number.
  * - Keeps only valid 10-digit Indian mobile numbers (starting 6-9).
  * - Deduplicates the result.
- * Returns { valid: string[], invalidCount: number, duplicateCount: number }.
+ * Returns { valid: string[], invalidCount, duplicateCount, totalEntered }.
  */
 function parseAndValidateNumbers(raw) {
   const lines = raw.split("\n").map((n) => n.trim()).filter(Boolean);
@@ -168,19 +185,13 @@ function parseAndValidateNumbers(raw) {
   let duplicateCount = 0;
 
   for (const n of cleaned) {
-    if (!isValid(n)) {
-      invalidCount++;
-      continue;
-    }
-    if (seen.has(n)) {
-      duplicateCount++;
-      continue;
-    }
+    if (!isValid(n)) { invalidCount++; continue; }
+    if (seen.has(n)) { duplicateCount++; continue; }
     seen.add(n);
     valid.push(n);
   }
 
-  return { valid, invalidCount, duplicateCount };
+  return { valid, invalidCount, duplicateCount, totalEntered: lines.length };
 }
 
 // ─────────────────────────────────────────────
@@ -299,14 +310,38 @@ export default function WappCampaign() {
   const [message, setMessage] = useState("");
   const [showConfirm, setShowConfirm] = useState(false);
   const [modal, setModal] = useState(null);
+  const [justCleaned, setJustCleaned] = useState(false);
 
   const showModal = useCallback((type, title, body = "") => setModal({ type, title, body }), []);
 
-  const { valid: numberList, invalidCount, duplicateCount } = parseAndValidateNumbers(numbers);
+  const { valid: numberList, invalidCount, duplicateCount, totalEntered } = parseAndValidateNumbers(numbers);
 
   const user = getUser();
   const isAdmin = (user?.role || "user").toLowerCase() === "admin";
   const isLarge = !isAdmin && numberList.length > QUEUE_THRESHOLD;
+  const needsCleanup = invalidCount > 0 || duplicateCount > 0;
+
+  // ── AUTO-CLEAN NUMBERS ──
+  // Strips "91" country-code prefixes, drops invalid/duplicate lines,
+  // and rewrites the textarea to only the valid 10-digit numbers.
+  // Fires on paste (right after the pasted text lands) and on blur
+  // (when the user leaves the field) — never on every keystroke, so
+  // typing a fresh number isn't wiped before it reaches 10 digits.
+  const cleanNumbersField = useCallback(() => {
+    setNumbers((prev) => {
+      const { valid } = parseAndValidateNumbers(prev);
+      const cleanedText = valid.join("\n");
+      if (cleanedText !== prev.trim()) {
+        setJustCleaned(true);
+        setTimeout(() => setJustCleaned(false), 1500);
+      }
+      return cleanedText;
+    });
+  }, []);
+
+  const handleNumbersPaste = useCallback(() => {
+    setTimeout(cleanNumbersField, 0);
+  }, [cleanNumbersField]);
 
   // ── RESET ──
   const resetForm = useCallback(() => {
@@ -342,8 +377,8 @@ export default function WappCampaign() {
       "info",
       "Message Will Be Sent 🚀",
       isLarge
-        ? `Total Numbers: ${numberList.length}\n\nCampaign  — status "PENDING".\nCheck the Report tab for live updates.`
-        : `Total Numbers: ${numberList.length}\n\nYour Campaign Will Be Send.\nCheck the Report.`
+        ? `Total Numbers: ${numberList.length}\nCampaign Will Be Submitted.`
+        : `Total Numbers: ${numberList.length}\nCampaign Will Be Submitted.`
     );
 
     resetForm();
@@ -357,12 +392,13 @@ export default function WappCampaign() {
       showModal("warning", "Fill All Fields ⚠️", "Please enter Campaign Name, Numbers, and Message before sending.");
       return;
     }
+    cleanNumbersField();
     if (!numberList.length) {
       showModal("error", "No Valid Numbers ❌", "None of the entered numbers are valid 10-digit Indian mobile numbers.");
       return;
     }
     setShowConfirm(true);
-  }, [campaignName, numbers, message, numberList, showModal]);
+  }, [campaignName, numbers, message, numberList, showModal, cleanNumbersField]);
 
   // ─────────────────────────────────────────────
   // RENDER
@@ -385,16 +421,46 @@ export default function WappCampaign() {
 
           <div className="p-4">
 
-            {/* CAMPAIGN NAME */}
-            <div className="camp-name-row">
-              <div className="bg-[#F86C6B] text-white px-4 py-2 text-[15px] flex items-center whitespace-nowrap">
-                Campaign Name
+            {/* CAMPAIGN NAME + LIVE NUMBER STATS */}
+            <div className="camp-header-row">
+              <div className="camp-name-row">
+                <div className="bg-[#F86C6B] text-white px-4 py-2 text-[15px] flex items-center whitespace-nowrap">
+                  Campaign Name
+                </div>
+                <input
+                  value={campaignName}
+                  onChange={(e) => setCampaignName(e.target.value)}
+                  className="camp-name-input border border-gray-300 h-[38px] px-3 outline-none transition-shadow duration-200 focus:shadow-[0_0_0_3px_rgba(32,168,216,0.2)] focus:border-[#20A8D8]"
+                />
               </div>
-              <input
-                value={campaignName}
-                onChange={(e) => setCampaignName(e.target.value)}
-                className="camp-name-input border border-gray-300 h-[38px] px-3 outline-none"
-              />
+
+              {(numberList.length > 0 || invalidCount > 0 || duplicateCount > 0) && (
+                <div className="camp-stats-row">
+                  <span className="camp-stat-badge bg-[#20A8D8] transition-transform duration-200 hover:scale-[1.03]">
+                    Total Valid Mobile:<b className="ml-1">{numberList.length}</b>
+                  </span>
+                  <span className="camp-stat-badge bg-[#F0AD4E] transition-transform duration-200 hover:scale-[1.03]">
+                    Duplicate:<b className="ml-1">{duplicateCount}</b>
+                  </span>
+                  <span className="camp-stat-badge bg-[#F86C6B] transition-transform duration-200 hover:scale-[1.03]">
+                    Invalid:<b className="ml-1">{invalidCount}</b>
+                  </span>
+                  {justCleaned && (
+                    <span className="camp-stat-badge bg-indigo-500 transition-all duration-200">
+                      ✓ List cleaned
+                    </span>
+                  )}
+                  {needsCleanup && (
+                    <button
+                      type="button"
+                      onClick={cleanNumbersField}
+                      className="camp-stat-badge bg-white text-gray-600 border border-gray-300 transition-all duration-150 hover:bg-gray-100 hover:shadow-sm"
+                    >
+                      🧹 Clean now
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="camp-grid">
@@ -405,8 +471,10 @@ export default function WappCampaign() {
                 <textarea
                   value={numbers}
                   onChange={(e) => setNumbers(e.target.value)}
+                  onPaste={handleNumbersPaste}
+                  onBlur={cleanNumbersField}
                   placeholder="One number per line"
-                  className="camp-textarea border border-green-400 rounded px-2 py-2 text-[13px] outline-none resize-none"
+                  className="camp-textarea border border-green-400 rounded px-2 py-2 text-[13px] outline-none resize-none transition-shadow duration-200 focus:shadow-[0_0_0_3px_rgba(74,222,128,0.25)]"
                 />
               </div>
 
@@ -416,7 +484,7 @@ export default function WappCampaign() {
                 <textarea
                   value={message}
                   onChange={(e) => setMessage(e.target.value)}
-                  className="w-full h-[190px] border border-green-400 rounded px-2 py-2 text-[13px] outline-none resize-none mb-3"
+                  className="w-full h-[190px] border border-green-400 rounded px-2 py-2 text-[13px] outline-none resize-none mb-3 transition-shadow duration-200 focus:shadow-[0_0_0_3px_rgba(74,222,128,0.25)]"
                 />
 
                 <UploadBox
@@ -447,24 +515,10 @@ export default function WappCampaign() {
               </div>
             </div>
 
-            {/* NUMBER COUNT BADGE */}
-            {(numberList.length > 0 || invalidCount > 0 || duplicateCount > 0) && (
-              <p className="mt-2 text-sm text-gray-500">
-                📋 {numberList.length} valid number{numberList.length !== 1 ? "s" : ""}
-                {isLarge && <span className="ml-2 text-orange-500 font-medium">⏳ Will be queued</span>}
-                {duplicateCount > 0 && (
-                  <span className="ml-2 text-amber-500">· {duplicateCount} duplicate{duplicateCount !== 1 ? "s" : ""} removed</span>
-                )}
-                {invalidCount > 0 && (
-                  <span className="ml-2 text-red-500">· {invalidCount} invalid removed</span>
-                )}
-              </p>
-            )}
-
             <button
               type="button"
               onClick={handleSendClick}
-              className="mt-4 bg-[#20A8D8] hover:bg-[#1b8db8] text-white px-7 py-3 rounded-b-md transition-colors"
+              className="mt-4 bg-[#20A8D8] hover:bg-[#1b8db8] text-white px-7 py-3 rounded-b-md transition-all duration-200 ease-out hover:shadow-lg active:scale-[0.98]"
             >
               Send Now
             </button>
@@ -475,33 +529,38 @@ export default function WappCampaign() {
 
       {/* CONFIRM MODAL */}
       {showConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl shadow-2xl w-[92%] max-w-[380px] p-6 text-center">
+        <div className="confirm-overlay">
+          <div className="confirm-box">
             <div className="flex justify-center mb-4">
               <div className="w-14 h-14 flex items-center justify-center rounded-full bg-gradient-to-br from-green-500 to-emerald-600 text-white text-2xl shadow-md">✓</div>
             </div>
             <h2 className="text-xl font-semibold text-gray-800 mb-3">Are You Sure?</h2>
 
             {isAdmin ? (
-              <p className="text-sm text-purple-600 bg-purple-50 rounded-lg px-3 py-2 mb-4">
-                👑 Admin — {numberList.length} Campaign Will Be Send
+              <p className="text-xl font-semibold text-gray-800 mb-4 px-3 py-2">
+               Campaign Will Be Send {numberList.length}
               </p>
             ) : isLarge ? (
-              <p className="text-sm text-green-600 bg-orange-50 rounded-lg px-3 py-2 mb-4">
-                ⏳ {numberList.length}<br />
-                <span className="text-xs text-orange-400">Status "PENDING"</span>
+              <p className="text-xl font-semibold text-gray-800 mb-4 px-3 py-2">
+               Campaign Will Be Send {numberList.length}<br />
               </p>
             ) : (
-              <p className="text-sm text-green-600 bg-green-50 rounded-lg px-3 py-2 mb-4">
-                ✅ {numberList.length}
+              <p className="text-xl font-semibold text-gray-800 mb-4 px-3 py-2">
+                Campaign Will Be Send {numberList.length}
               </p>
             )}
 
             <div className="flex gap-3 justify-center">
-              <button onClick={confirmSend} className="px-5 py-2 rounded-lg bg-gradient-to-r from-green-500 to-emerald-600 text-white font-medium shadow hover:scale-105 transition">
+              <button
+                onClick={confirmSend}
+                className="px-5 py-2 rounded-lg bg-gradient-to-r from-green-500 to-emerald-600 text-white font-medium shadow transition-all duration-200 hover:scale-105 hover:shadow-lg active:scale-[0.98]"
+              >
                 Yes, Send
               </button>
-              <button onClick={() => setShowConfirm(false)} className="px-5 py-2 rounded-lg bg-gray-200 text-gray-700 font-medium hover:bg-gray-300 transition">
+              <button
+                onClick={() => setShowConfirm(false)}
+                className="px-5 py-2 rounded-lg bg-gray-200 text-gray-700 font-medium transition-all duration-200 hover:bg-gray-300 active:scale-[0.98]"
+              >
                 No
               </button>
             </div>
@@ -511,10 +570,21 @@ export default function WappCampaign() {
 
       <Modal modal={modal} onClose={() => setModal(null)} />
 
+      <style>{MODAL_CSS}</style>
+
       <style>{`
         .camp-wrap { padding: 24px; }
-        .camp-name-row { display: flex; margin-bottom: 20px; flex-wrap: wrap; gap: 0; }
+        .camp-header-row { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; margin-bottom: 20px; }
+        .camp-name-row { display: flex; flex-wrap: wrap; gap: 0; }
         .camp-name-input { width: 320px; }
+        .camp-stats-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; animation: fadeIn .25s ease; }
+        .camp-stat-badge {
+          display: inline-flex; align-items: center; color: #fff; font-size: 13px; font-weight: 500;
+          padding: 8px 14px; border-radius: 6px; white-space: nowrap; cursor: default;
+          box-shadow: 0 1px 3px rgba(0,0,0,.12);
+        }
+        button.camp-stat-badge { cursor: pointer; box-shadow: none; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
         .camp-grid { display: flex; gap: 20px; }
         .camp-left { width: 25%; }
         .camp-right { width: 75%; }
@@ -525,7 +595,8 @@ export default function WappCampaign() {
           .camp-left, .camp-right { width: 100%; }
           .camp-textarea { height: 180px; }
           .camp-name-input { width: 100%; flex: 1; }
-          .camp-name-row { flex-wrap: nowrap; }
+          .camp-name-row { flex-wrap: nowrap; width: 100%; }
+          .camp-header-row { flex-direction: column; align-items: stretch; gap: 10px; }
         }
         @media (max-width: 480px) {
           .camp-wrap { padding: 8px; }
