@@ -969,6 +969,8 @@ app.get("/get-device", (req, res) => {
   });
 });
 
+
+
 // GET /list-devices
 app.get("/list-devices", (_req, res) => {
   const list = [];
