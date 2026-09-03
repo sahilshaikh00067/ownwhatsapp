@@ -298,7 +298,7 @@ def update_user(request):
                     parent.save()
 
                 else:
-                    # Removing credit from child — return to parent
+                    # Removing credit from child return to parent
                     parent.credit += abs(diff)
                     parent.save()
 
