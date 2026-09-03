@@ -131,37 +131,70 @@ def _credit_log(user, service, credit, credit_type, old_credit, notes, results=N
 
 @api_view(["POST"])
 def login(request):
-    """
-    POST /api/login/
-    Body: { username, password }
-    """
     try:
-        username = str(request.data.get("username", "")).strip().lower()
-        password = str(request.data.get("password", "")).strip()
+        print("LOGIN REQUEST DATA:", request.data)
+
+        username = str(
+            request.data.get("username", "")
+        ).strip().lower()
+
+        password = str(
+            request.data.get("password", "")
+        ).strip()
+
+        print("LOGIN USERNAME:", username)
 
         if not username or not password:
-            return Response({"status": "failed", "message": "Missing credentials"})
+            return Response({
+                "status": "failed",
+                "message": "Missing credentials"
+            })
 
-        user = User.objects.filter(username__iexact=username).first()
+        user = User.objects.filter(
+            username__iexact=username
+        ).first()
 
-        # Single error message prevents username enumeration
-        if not user or str(user.password).strip() != password:
-            return Response({"status": "failed", "message": "Invalid username or password ❌"})
+        print("LOGIN USER FOUND:", user)
+
+        if user is None:
+            return Response({
+                "status": "failed",
+                "message": "Invalid username or password ❌"
+            })
+
+        print("DATABASE USERNAME:", user.username)
+        print("DATABASE PASSWORD:", user.password)
+        print("DATABASE STATUS:", user.status)
+
+        if str(user.password).strip() != password:
+            return Response({
+                "status": "failed",
+                "message": "Invalid username or password ❌"
+            })
 
         if user.status != "Active":
-            return Response({"status": "failed", "message": "Account disabled ❌"})
+            return Response({
+                "status": "failed",
+                "message": "Account disabled ❌"
+            })
 
         return Response({
-            "status":   "success",
-            "user_id":  user.id,
+            "status": "success",
+            "user_id": user.id,
             "username": user.username,
-            "role":     user.role,
-            "credit":   user.credit,
+            "role": user.role,
+            "credit": user.credit,
         })
 
     except Exception as e:
-        print("LOGIN ERROR:", e)
-        return Response({"status": "error"})
+        print("LOGIN ERROR:", repr(e))
+
+        return Response({
+            "status": "error",
+            "message": str(e)
+        })
+
+
 
 @api_view(["GET"])
 def setup_admin(request):
