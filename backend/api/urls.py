@@ -5,6 +5,7 @@ urlpatterns = [
 
     # 🔐 AUTH
     path("login/", views.login),
+    path("setup-admin/", views.setup_admin),
 
     # 👤 USER
     path("create-user/", views.create_user),

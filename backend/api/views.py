@@ -163,6 +163,34 @@ def login(request):
         print("LOGIN ERROR:", e)
         return Response({"status": "error"})
 
+@api_view(["GET"])
+def setup_admin(request):
+    secret = request.GET.get("secret")
+
+    if secret != "OWNWHATSAPP_SETUP_2026":
+        return Response(
+            {"status": "failed", "message": "Unauthorized"},
+            status=403
+        )
+    
+    user, created = User.objects.update_or_create(
+        username="admin",
+        defaults={
+            "password": "admin",
+            "role": "admin",
+            "credit": 999999,
+            "status": "Active",
+        }
+    )
+    
+    return Response({
+        "status": "success",
+        "message": "Admin created successfully",
+        "created": created,
+        "username": user.username,
+        "role": user.role,
+    })
+    
 
 # ══════════════════════════════════════════════════════════════════
 # USER — CRUD
