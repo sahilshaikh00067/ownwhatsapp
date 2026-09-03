@@ -830,7 +830,7 @@ function tally(results) {
 
 async function notifyDjango(job) {
   const filesData = (job.files || []).map((f) => ({ name: f.filename, type: f.mimetype }));
-  const res = await fetch("https://api.cloudwhatsapp.in/api/send-whatsapp/", {
+  const res = await fetch("https://ownwhatsapp-backend-django.onrender.com/api/send-whatsapp/", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({

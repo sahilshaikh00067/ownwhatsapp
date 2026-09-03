@@ -4,7 +4,7 @@ import { Calendar } from "lucide-react";
 // ─────────────────────────────────────────────
 // CONSTANTS
 // ─────────────────────────────────────────────
-const API_DJANGO = "https://api.cloudwhatsapp.in";
+const API_DJANGO = "https://ownwhatsapp-backend-django.onrender.com";
 const POLL_MS = 5000;
 const FILTERS = ["Today", "Yesterday", "Last 7 Days", "Last 30 Days", "This Month", "Last Month", "Custom Range"];
 

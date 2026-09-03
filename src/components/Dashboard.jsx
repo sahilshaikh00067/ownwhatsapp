@@ -4,7 +4,7 @@ import { PieChart, Pie, Cell, Tooltip, Legend } from "recharts";
 // ─────────────────────────────────────────────
 // CONSTANTS
 // ─────────────────────────────────────────────
-const API = "https://api.cloudwhatsapp.in";
+const API = "https://ownwhatsapp-backend-django.onrender.com";
 const COLORS  = ["#1E88E5", "#12C48B"];
 const FILTERS = ["Today", "Yesterday", "Last 7 Days", "Last 30 Days", "Custom Range"];
 
