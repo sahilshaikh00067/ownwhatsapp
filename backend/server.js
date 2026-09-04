@@ -15,6 +15,8 @@ const PORT = Number(process.env.PORT || 5000);
 const NODE_ID = process.env.NODE_ID || "node1";
 const MAX_DEVICES = Number(process.env.MAX_DEVICES || 20);
 const API_KEY = process.env.API_KEY || "";
+process.env.PUPPETEER_CACHE_DIR =
+  process.env.PUPPETEER_CACHE_DIR || "/opt/render/.cache/puppeteer";
 
 fs.mkdirSync(path.join(__dirname, "sessions"), {
   recursive: true,
@@ -223,44 +225,27 @@ async function createDevice(deviceId) {
 
   log(`Creating WhatsApp device: ${deviceId}`);
 
-  const client = new Client({
-    authStrategy: new LocalAuth({
-      clientId: deviceId,
-      dataPath: path.join(
-        __dirname,
-        "sessions"
-      ),
-    }),
+const client = new Client({
+  authStrategy: new LocalAuth({
+    clientId: deviceId,
+    dataPath: "./.wwebjs_auth"
+  }),
 
-    puppeteer: {
-      headless: true,
+  puppeteer: {
+    headless: true,
 
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--no-first-run",
-        "--no-zygote",
-        "--disable-extensions",
-        "--disable-background-networking",
-        "--disable-background-timer-throttling",
-        "--disable-renderer-backgrounding",
-        "--disable-features=site-per-process",
-        "--window-size=1280,720",
-      ],
+    executablePath: undefined,
 
-      timeout: 120000,
-
-      protocolTimeout: 120000,
-    },
-
-    restartOnAuthFail: true,
-
-    takeoverOnConflict: true,
-
-    takeoverTimeoutMs: 0,
-  });
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-gpu",
+      "--no-first-run",
+      "--no-zygote"
+    ]
+  }
+});
 
   clients.set(deviceId, client);
 
@@ -486,62 +471,69 @@ app.get(
 // GET /create-device?deviceId=testqr123
 // ============================================================
 
-app.get(
-  "/create-device",
-  async (req, res) => {
-    const deviceId = String(
-      req.query.deviceId || ""
-    );
+app.get("/create-device", async (req, res) => {
+  res.set({
+    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+  });
 
-    if (!validDeviceId(deviceId)) {
-      return res.status(400).json({
-        status: "failed",
-        message:
-          "Invalid deviceId. Use only letters, numbers, _ or -",
-      });
-    }
+  const deviceId = String(req.query.deviceId || "");
 
-    if (clients.has(deviceId)) {
-      const data =
-        getDevice(deviceId);
-
-      return res.json({
-        status: "already_exists",
-        deviceId,
-        deviceStatus:
-          data?.status || "unknown",
-        ready:
-          data?.status === "ready",
-      });
-    }
-
-    if (clients.size >= MAX_DEVICES) {
-      return res.status(400).json({
-        status: "failed",
-        message: `Maximum ${MAX_DEVICES} devices reached`,
-      });
-    }
-
-    // Start in background.
-    // IMPORTANT:
-    // Do not wait for initialize() before returning.
-    // QR will be available through /get-qr.
-
-    createDevice(deviceId)
-      .catch((error) => {
-        log(
-          `BACKGROUND CREATE ERROR ${deviceId}:`,
-          error.stack || error.message
-        );
-      });
-
-    return res.json({
-      status: "creating",
-      deviceId,
-      node: NODE_ID,
+  if (!validDeviceId(deviceId)) {
+    return res.status(400).json({
+      status: "failed",
+      message:
+        "Invalid deviceId. Use only letters, numbers, _ or -",
     });
   }
-);
+
+  if (clients.has(deviceId)) {
+    const data = getDevice(deviceId);
+
+    return res.json({
+      status: "already_exists",
+      deviceId,
+      deviceStatus: data?.status || "unknown",
+      ready: data?.status === "ready",
+      qrAvailable: Boolean(data?.qr),
+    });
+  }
+
+  if (clients.size >= MAX_DEVICES) {
+    return res.status(400).json({
+      status: "failed",
+      message: `Maximum ${MAX_DEVICES} devices reached`,
+    });
+  }
+
+  // Create immediately in memory
+  updateDevice(deviceId, {
+    status: "creating",
+    qr: "",
+    error: "",
+    number: "",
+    name: "",
+  });
+
+  // Background initialize
+  createDevice(deviceId).catch((error) => {
+    console.error(
+      `BACKGROUND CREATE ERROR ${deviceId}:`,
+      error.stack || error.message
+    );
+
+    updateDevice(deviceId, {
+      status: "error",
+      qr: "",
+      error: error.message || "Failed to initialize WhatsApp",
+    });
+  });
+
+  return res.json({
+    status: "creating",
+    deviceId,
+    node: NODE_ID,
+  });
+});
 
 // ============================================================
 // GET QR
@@ -549,49 +541,53 @@ app.get(
 // GET /get-qr?deviceId=testqr123
 // ============================================================
 
-app.get(
-  "/get-qr",
-  (req, res) => {
-    const deviceId = String(
-      req.query.deviceId || ""
-    );
+app.get("/get-qr", (req, res) => {
+  // IMPORTANT: QR response kabhi cache nahi hona chahiye
+  res.set({
+    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    "Pragma": "no-cache",
+    "Expires": "0",
+  });
 
-    if (!validDeviceId(deviceId)) {
-      return res.status(400).json({
-        status: "failed",
-        message: "Invalid deviceId",
-      });
-    }
+  const deviceId = String(req.query.deviceId || "");
 
-    const data =
-      getDevice(deviceId);
-
-    if (!data) {
-      return res.json({
-        status: "not_found",
-        qr: "",
-        ready: false,
-        exists: false,
-        error: "",
-      });
-    }
-
-    return res.json({
-      status: data.status,
-      qr: data.qr || "",
-      ready:
-        data.status === "ready",
-      exists:
-        clients.has(deviceId),
-      error:
-        data.error || "",
-      number:
-        data.number || "",
-      name:
-        data.name || "",
+  if (!validDeviceId(deviceId)) {
+    return res.status(400).json({
+      status: "failed",
+      message: "Invalid deviceId",
+      qr: "",
+      ready: false,
+      exists: false,
+      error: "",
     });
   }
-);
+
+  const data = getDevice(deviceId);
+  const client = clients.get(deviceId);
+
+  if (!data) {
+    return res.json({
+      status: "not_found",
+      deviceId,
+      qr: "",
+      ready: false,
+      exists: false,
+      error: "",
+    });
+  }
+
+  return res.json({
+    status: data.status || "creating",
+    deviceId,
+    qr: data.qr || "",
+    ready: data.status === "ready",
+    exists: Boolean(client),
+    error: data.error || "",
+    number: data.number || "",
+    name: data.name || "",
+    updatedAt: data.updatedAt || now(),
+  });
+});
 
 // ============================================================
 // GET DEVICE
