@@ -11,6 +11,7 @@ const fs = require("fs");
 function getChromePath() {
   try {
     const puppeteer = require("puppeteer");
+    
     const chromePath = puppeteer.executablePath();
 
     if (chromePath && fs.existsSync(chromePath)) {
