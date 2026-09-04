@@ -7,7 +7,7 @@ import { useRef } from "react";
 // ─────────────────────────────────────────────
 // CONSTANTS
 // ─────────────────────────────────────────────
-const API_NODE = "http://localhost:5000";
+const API_NODE = "https://ownwhatsapp-backend.onrender.com";
 const API_DJANGO = "https://ownwhatsapp-backend-django.onrender.com";
 const QUEUE_THRESHOLD = 20; // 🔥 numbers above this go to "pending" queue
 

@@ -5,8 +5,9 @@ import { useNavigate } from "react-router-dom";
 // CONSTANTS
 // ==========================================
 
-const API_URL = "https://ownwhatsapp-backend-django.onrender.com/api/login/";
-const TIMEOUT = 30000;
+const API_URL =
+  "https://ownwhatsapp-backend-django.onrender.com";
+  const TIMEOUT = 30000;
 const MAX_RETRIES = 1;
 
 // ==========================================

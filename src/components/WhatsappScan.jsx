@@ -60,7 +60,7 @@ const WhatsappScan = () => {
   // =========================
   const checkDeviceStatus = async (id) => {
     try {
-      const res = await fetch(`http://localhost:5000/get-device?deviceId=${id}`);
+      const res = await fetch(`https://ownwhatsapp-backend.onrender.com/get-device?deviceId=${id}`);
       if (!res.ok) {
         setDeviceStatus((prev) => ({ ...prev, [id]: "disconnected" }));
         return;
@@ -99,7 +99,7 @@ const WhatsappScan = () => {
     setQrLoading(true);
 
     try {
-await fetch(`http://localhost:5000/create-device?deviceId=${id}`);
+await fetch(`https://ownwhatsapp-backend.onrender.com/create-device?deviceId=${id}`);
       setDevices((prev) => {
         const updated = [...prev, id];
         localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
@@ -124,7 +124,7 @@ await fetch(`http://localhost:5000/create-device?deviceId=${id}`);
 
     const poll = async () => {
       try {
-        const res = await fetch(`http://localhost:5000/get-qr?deviceId=${activeDevice}`);
+        const res = await fetch(`https://ownwhatsapp-backend.onrender.com/get-qr?deviceId=${activeDevice}`);
         if (!res.ok) {
           timerRef.current = setTimeout(poll, 500);
           return;
@@ -167,7 +167,7 @@ await fetch(`http://localhost:5000/create-device?deviceId=${id}`);
     if (!window.confirm("Delete this device?")) return;
 
     try {
-      const res = await fetch(`http://localhost:5000/delete-device?deviceId=${id}`);
+      const res = await fetch(`https://ownwhatsapp-backend.onrender.com/delete-device?deviceId=${id}`);
       const data = await res.json();
 
       if (data.status === "not_found" || data.status === "deleted") {
@@ -186,7 +186,7 @@ await fetch(`http://localhost:5000/create-device?deviceId=${id}`);
     if (!window.confirm("Disconnect this device? Session will be cleared.")) return;
 
     try {
-      const res = await fetch(`http://localhost:5000/logout?deviceId=${id}`);
+      const res = await fetch(`https://ownwhatsapp-backend.onrender.com/logout?deviceId=${id}`);
       const data = await res.json();
 
       if (data.status === "logged_out" || data.status === "not_found") {
