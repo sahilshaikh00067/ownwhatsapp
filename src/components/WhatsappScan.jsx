@@ -122,36 +122,69 @@ await fetch(`https://ownwhatsapp-backend.onrender.com/create-device?deviceId=${i
     if (!activeDevice) return;
     if (timerRef.current) clearTimeout(timerRef.current);
 
-    const poll = async () => {
-      try {
-        const res = await fetch(`https://ownwhatsapp-backend.onrender.com/get-qr?deviceId=${activeDevice}`);
-        if (!res.ok) {
-          timerRef.current = setTimeout(poll, 500);
-          return;
-        }
+const poll = async () => {
+  try {
+    const url =
+      `https://ownwhatsapp-backend.onrender.com/get-qr?deviceId=${activeDevice}&_=${Date.now()}`;
 
-        const data = await res.json();
+    const res = await fetch(url, {
+      method: "GET",
+      cache: "no-store",
+      headers: {
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+      },
+    });
 
-        if (data.ready) {
-          // 🔥 Connected!
-          await checkDeviceStatus(activeDevice);
-          setShowQR(false);
-          setQr("");
-          setQrLoading(false);
-          setActiveDevice(null);
-          return;
-        }
+    if (!res.ok) {
+      console.log("QR API ERROR:", res.status);
+      timerRef.current = setTimeout(poll, 1000);
+      return;
+    }
 
-        if (data.qr) {
-          setQr(data.qr);
-          setQrLoading(false);
-        }
+    const data = await res.json();
 
-        timerRef.current = setTimeout(poll, 500); // 🔥 Fast 500ms polling
-      } catch {
-        timerRef.current = setTimeout(poll, 1000);
-      }
-    };
+    console.log("QR RESPONSE:", data);
+
+    // Device ready
+    if (data.ready || data.status === "ready") {
+      await checkDeviceStatus(activeDevice);
+
+      setShowQR(false);
+      setQr("");
+      setQrLoading(false);
+      setActiveDevice(null);
+
+      return;
+    }
+
+    // Backend error
+    if (data.status === "error") {
+      console.error("QR BACKEND ERROR:", data.error);
+
+      setQrLoading(false);
+
+      timerRef.current = setTimeout(poll, 2000);
+      return;
+    }
+
+    // QR available
+    if (data.qr && data.qr.startsWith("data:image")) {
+      setQr(data.qr);
+      setQrLoading(false);
+    } else {
+      setQr("");
+      setQrLoading(true);
+    }
+
+    timerRef.current = setTimeout(poll, 1000);
+
+  } catch (error) {
+    console.error("QR POLLING ERROR:", error);
+
+    timerRef.current = setTimeout(poll, 1500);
+  }
+};
 
     poll();
 
