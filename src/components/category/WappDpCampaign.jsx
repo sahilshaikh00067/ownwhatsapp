@@ -12,7 +12,7 @@ const API_DJANGO = "https://ownwhatsapp-backend-django.onrender.com";
 const QUEUE_THRESHOLD = 20; // 🔥 numbers above this go to "pending" queue
 
 // ─────────────────────────────────────────────
-// MODAL — memoized so it never re-renders unless modal changes
+// MODAL — memoized  never re-renders unless modal changes
 // ─────────────────────────────────────────────
 const MODAL_STYLES = {
   success: { emoji: "🚀", bg: "from-green-500 to-emerald-600", border: "border-green-200", text: "text-green-700", light: "bg-green-50" },

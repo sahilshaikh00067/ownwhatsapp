@@ -4,70 +4,98 @@ const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
-const { Client, LocalAuth } = require("whatsapp-web.js");
-const qrcode = require("qrcode");
-const fs = require("fs");
-
-function getChromePath() {
-  try {
-    const puppeteer = require("puppeteer");
-    
-    const chromePath = puppeteer.executablePath();
-
-    if (chromePath && fs.existsSync(chromePath)) {
-      console.log("✅ Chrome found:", chromePath);
-      return chromePath;
-    }
-  } catch (error) {
-    console.error("Chrome detection error:", error.message);
-  }
-
-  console.error("❌ Chrome executable not found");
-  return undefined;
-}
+const multer = require("multer");
 const path = require("path");
+const fs = require("fs");
+const puppeteer = require("puppeteer");
+const qrcode = require("qrcode");
+
+const {
+  Client,
+  LocalAuth,
+  MessageMedia
+} = require("whatsapp-web.js");
 
 const app = express();
+
+// ============================================================
+// CONFIG
+// ============================================================
 
 const PORT = Number(process.env.PORT || 5000);
 const NODE_ID = process.env.NODE_ID || "node1";
 const MAX_DEVICES = Number(process.env.MAX_DEVICES || 20);
 const API_KEY = process.env.API_KEY || "";
-process.env.PUPPETEER_CACHE_DIR =
-  process.env.PUPPETEER_CACHE_DIR || "/opt/render/.cache/puppeteer";
 
-fs.mkdirSync(path.join(__dirname, "sessions"), {
-  recursive: true,
+const AUTH_PATH = path.join(
+  __dirname,
+  ".wwebjs_auth"
+);
+
+process.env.PUPPETEER_CACHE_DIR =
+  process.env.PUPPETEER_CACHE_DIR ||
+  "/opt/render/.cache/puppeteer";
+
+fs.mkdirSync(AUTH_PATH, {
+  recursive: true
 });
+
+// ============================================================
+// EXPRESS CONFIG
+// ============================================================
 
 app.set("trust proxy", 1);
 
 app.use(
   helmet({
-    crossOriginResourcePolicy: false,
+    crossOriginResourcePolicy: false
   })
 );
 
 app.use(
   cors({
     origin: true,
-    methods: ["GET", "POST"],
+    methods: [
+      "GET",
+      "POST",
+      "OPTIONS"
+    ],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "x-api-key"
+    ]
   })
 );
 
-app.use(express.json({ limit: "2mb" }));
-app.use(express.urlencoded({ extended: true, limit: "2mb" }));
+app.use(
+  express.json({
+    limit: "10mb"
+  })
+);
 
-// Optional API authentication
+app.use(
+  express.urlencoded({
+    extended: true,
+    limit: "10mb"
+  })
+);
+
+// ============================================================
+// OPTIONAL API KEY
+// ============================================================
+
 if (API_KEY) {
   app.use((req, res, next) => {
     if (req.path === "/health") {
       return next();
     }
 
-    if (req.get("x-api-key") !== API_KEY) {
+    if (
+      req.get("x-api-key") !== API_KEY
+    ) {
       return res.status(401).json({
-        status: "unauthorized",
+        status: "unauthorized"
       });
     }
 
@@ -75,52 +103,53 @@ if (API_KEY) {
   });
 }
 
-// Rate limiter
+// ============================================================
+// RATE LIMIT
+// ============================================================
+
 const limiter = rateLimit({
   windowMs: 60 * 1000,
   max: 120,
   standardHeaders: true,
-  legacyHeaders: false,
+  legacyHeaders: false
 });
 
 app.use(limiter);
 
 // ============================================================
-// DEVICE STATE
+// MULTER
 // ============================================================
 
-const DEVICE_RE = /^[a-zA-Z0-9_-]{1,64}$/;
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 50 * 1024 * 1024
+  }
+});
+
+// ============================================================
+// DEVICE STORAGE
+// ============================================================
+
+const DEVICE_RE =
+  /^[a-zA-Z0-9_-]{1,64}$/;
 
 const clients = new Map();
-
 const devices = new Map();
-
-/*
-devices Map structure:
-
-{
-  status: "creating" | "qr" | "authenticated" | "ready" |
-          "disconnected" | "error",
-
-  qr: "",
-  number: "",
-  name: "",
-  error: "",
-  createdAt: "",
-  updatedAt: ""
-}
-*/
 
 // ============================================================
 // HELPERS
 // ============================================================
 
-function log(...args) {
-  console.log(`[${new Date().toISOString()}]`, ...args);
-}
-
 function now() {
   return new Date().toISOString();
+}
+
+function log(...args) {
+  console.log(
+    `[${now()}]`,
+    ...args
+  );
 }
 
 function validDeviceId(deviceId) {
@@ -130,27 +159,74 @@ function validDeviceId(deviceId) {
   );
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function getChromePath() {
+  try {
+    const chromePath =
+      puppeteer.executablePath();
+
+    log(
+      "Puppeteer Chrome Path:",
+      chromePath
+    );
+
+    if (
+      chromePath &&
+      fs.existsSync(chromePath)
+    ) {
+      log("Chrome found successfully");
+      return chromePath;
+    }
+
+    log(
+      "Chrome executable path not found"
+    );
+
+    return undefined;
+
+  } catch (error) {
+    log(
+      "Chrome detection error:",
+      error.message
+    );
+
+    return undefined;
+  }
+}
+
 function getDevice(deviceId) {
   return devices.get(deviceId);
 }
 
-function updateDevice(deviceId, patch) {
-  const previous = devices.get(deviceId) || {
-    status: "creating",
-    qr: "",
-    number: "",
-    name: "",
-    error: "",
-    createdAt: now(),
-  };
+function updateDevice(
+  deviceId,
+  patch
+) {
+  const previous =
+    devices.get(deviceId) || {
+      status: "creating",
+      qr: "",
+      number: "",
+      name: "",
+      error: "",
+      createdAt: now()
+    };
 
   const updated = {
     ...previous,
     ...patch,
-    updatedAt: now(),
+    updatedAt: now()
   };
 
-  devices.set(deviceId, updated);
+  devices.set(
+    deviceId,
+    updated
+  );
 
   return updated;
 }
@@ -163,14 +239,43 @@ async function safeDestroy(client) {
   try {
     await client.destroy();
   } catch (error) {
-    // Ignore destroy errors
+    log(
+      "Client destroy error:",
+      error.message
+    );
   }
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
+function normalizeNumber(number) {
+  const digits =
+    String(number || "")
+      .replace(/\D/g, "");
+
+  if (
+    digits.length < 8 ||
+    digits.length > 15
+  ) {
+    return null;
+  }
+
+  return `${digits}@c.us`;
+}
+
+async function getWhatsAppState(
+  deviceId
+) {
+  const client =
+    clients.get(deviceId);
+
+  if (!client) {
+    return null;
+  }
+
+  try {
+    return await client.getState();
+  } catch (error) {
+    return null;
+  }
 }
 
 // ============================================================
@@ -181,7 +286,8 @@ async function removeDevice(
   deviceId,
   deleteSession = true
 ) {
-  const client = clients.get(deviceId);
+  const client =
+    clients.get(deviceId);
 
   clients.delete(deviceId);
 
@@ -190,20 +296,25 @@ async function removeDevice(
   devices.delete(deviceId);
 
   if (deleteSession) {
-    const sessionPath = path.join(
-      __dirname,
-      "sessions",
-      ".wwebjs_auth",
-      `session-${deviceId}`
-    );
+    const sessionPath =
+      path.join(
+        AUTH_PATH,
+        `session-${deviceId}`
+      );
 
     try {
-      fs.rmSync(sessionPath, {
-        recursive: true,
-        force: true,
-      });
+      fs.rmSync(
+        sessionPath,
+        {
+          recursive: true,
+          force: true
+        }
+      );
 
-      log(`Session deleted: ${deviceId}`);
+      log(
+        `Session deleted: ${deviceId}`
+      );
+
     } catch (error) {
       log(
         `Session delete error ${deviceId}:`,
@@ -218,16 +329,24 @@ async function removeDevice(
 // ============================================================
 
 async function createDevice(deviceId) {
+
   if (!validDeviceId(deviceId)) {
-    throw new Error("INVALID_DEVICE_ID");
+    throw new Error(
+      "INVALID_DEVICE_ID"
+    );
   }
 
   if (clients.has(deviceId)) {
-    log(`Device already exists: ${deviceId}`);
+    log(
+      `Device already exists: ${deviceId}`
+    );
+
     return;
   }
 
-  if (clients.size >= MAX_DEVICES) {
+  if (
+    clients.size >= MAX_DEVICES
+  ) {
     throw new Error(
       `MAX_DEVICES_REACHED (${MAX_DEVICES})`
     );
@@ -238,205 +357,309 @@ async function createDevice(deviceId) {
     qr: "",
     error: "",
     number: "",
-    name: "",
+    name: ""
   });
 
-  log(`Creating WhatsApp device: ${deviceId}`);
+  const chromePath =
+    getChromePath();
 
-  const client = new Client({
-    authStrategy: new LocalAuth({
-      clientId: deviceId,
-      dataPath: "./.wwebjs_auth"
-    }),
-
-    puppeteer: {
-      headless: true,
-      executablePath: getChromePath(),
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--no-first-run",
-        "--no-zygote",
-        "--disable-software-rasterizer"
-      ]
-    }
-  });
-
-  clients.set(deviceId, client);
-
-  // ----------------------------------------------------------
-  // QR EVENT
-  // ----------------------------------------------------------
-
-  client.on("qr", async (qr) => {
-    try {
-      log(`QR received from WhatsApp: ${deviceId}`);
-
-      const qrDataUrl =
-        await qrcode.toDataURL(qr, {
-          errorCorrectionLevel: "M",
-          margin: 2,
-          scale: 8,
-        });
-
-      updateDevice(deviceId, {
-        status: "qr",
-        qr: qrDataUrl,
-        error: "",
-      });
-
-      log(`QR generated successfully: ${deviceId}`);
-    } catch (error) {
-      log(
-        `QR generation error ${deviceId}:`,
-        error.message
-      );
-
-      updateDevice(deviceId, {
-        status: "error",
-        error: `QR_GENERATION_ERROR: ${error.message}`,
-      });
-    }
-  });
-
-  // ----------------------------------------------------------
-  // AUTHENTICATED
-  // ----------------------------------------------------------
-
-  client.on("authenticated", () => {
-    log(`Authenticated: ${deviceId}`);
-
-    updateDevice(deviceId, {
-      status: "authenticated",
-      qr: "",
-      error: "",
-    });
-  });
-
-  // ----------------------------------------------------------
-  // READY
-  // ----------------------------------------------------------
-
-  client.on("ready", () => {
-    const info = client.info;
-
-    updateDevice(deviceId, {
-      status: "ready",
-      qr: "",
-      error: "",
-      number: info?.wid?.user || "",
-      name: info?.pushname || "",
-    });
-
-    log(
-      `DEVICE READY: ${deviceId} -> ${info?.wid?.user || "unknown"
-      }`
-    );
-  });
-
-  // ----------------------------------------------------------
-  // AUTH FAILURE
-  // ----------------------------------------------------------
-
-  client.on("auth_failure", (message) => {
-    log(
-      `AUTH FAILURE ${deviceId}:`,
-      message
-    );
+  if (!chromePath) {
+    const errorMessage =
+      "Chrome executable not found. Puppeteer Chrome installation failed.";
 
     updateDevice(deviceId, {
       status: "error",
       qr: "",
-      error: `AUTH_FAILURE: ${message || "Unknown error"
-        }`,
+      error: errorMessage
     });
-  });
 
-  // ----------------------------------------------------------
-  // DISCONNECTED
-  // ----------------------------------------------------------
-
-  client.on("disconnected", async (reason) => {
-    log(
-      `DEVICE DISCONNECTED ${deviceId}:`,
-      reason
+    throw new Error(
+      errorMessage
     );
+  }
 
-    clients.delete(deviceId);
+  log(
+    `Creating WhatsApp device: ${deviceId}`
+  );
 
-    updateDevice(deviceId, {
-      status: "disconnected",
-      qr: "",
-      error: String(reason || "Disconnected"),
+  const client =
+    new Client({
+
+      authStrategy:
+        new LocalAuth({
+          clientId: deviceId,
+          dataPath: AUTH_PATH
+        }),
+
+      puppeteer: {
+
+        headless: true,
+
+        executablePath:
+          chromePath,
+
+        args: [
+          "--no-sandbox",
+          "--disable-setuid-sandbox",
+          "--disable-dev-shm-usage",
+          "--disable-gpu",
+          "--disable-software-rasterizer",
+          "--disable-extensions",
+          "--disable-background-networking",
+          "--disable-sync",
+          "--no-first-run",
+          "--no-zygote"
+        ]
+      }
     });
-  });
 
-  // ----------------------------------------------------------
+  clients.set(
+    deviceId,
+    client
+  );
+
+  // ==========================================================
+  // QR EVENT
+  // ==========================================================
+
+  client.on(
+    "qr",
+    async (qrText) => {
+
+      try {
+
+        log(
+          `QR RECEIVED: ${deviceId}`
+        );
+
+        const qrDataUrl =
+          await qrcode.toDataURL(
+            qrText,
+            {
+              errorCorrectionLevel:
+                "M",
+
+              margin: 2,
+
+              width: 350
+            }
+          );
+
+        updateDevice(
+          deviceId,
+          {
+            status: "qr",
+            qr: qrDataUrl,
+            error: ""
+          }
+        );
+
+        log(
+          `QR GENERATED SUCCESSFULLY: ${deviceId}`
+        );
+
+      } catch (error) {
+
+        log(
+          `QR GENERATION ERROR ${deviceId}:`,
+          error.message
+        );
+
+        updateDevice(
+          deviceId,
+          {
+            status: "error",
+            qr: "",
+            error:
+              `QR_GENERATION_ERROR: ${error.message}`
+          }
+        );
+      }
+    }
+  );
+
+  // ==========================================================
+  // LOADING SCREEN
+  // ==========================================================
+
+  client.on(
+    "loading_screen",
+    (
+      percent,
+      message
+    ) => {
+
+      log(
+        `LOADING ${deviceId}:`,
+        percent,
+        message
+      );
+    }
+  );
+
+  // ==========================================================
+  // AUTHENTICATED
+  // ==========================================================
+
+  client.on(
+    "authenticated",
+    () => {
+
+      log(
+        `AUTHENTICATED: ${deviceId}`
+      );
+
+      updateDevice(
+        deviceId,
+        {
+          status:
+            "authenticated",
+          qr: "",
+          error: ""
+        }
+      );
+    }
+  );
+
+  // ==========================================================
+  // READY
+  // ==========================================================
+
+  client.on(
+    "ready",
+    () => {
+
+      const info =
+        client.info;
+
+      updateDevice(
+        deviceId,
+        {
+          status: "ready",
+          qr: "",
+          error: "",
+
+          number:
+            info?.wid?.user || "",
+
+          name:
+            info?.pushname || ""
+        }
+      );
+
+      log(
+        `DEVICE READY: ${deviceId}`,
+        info?.wid?.user ||
+          "unknown"
+      );
+    }
+  );
+
+  // ==========================================================
+  // AUTH FAILURE
+  // ==========================================================
+
+  client.on(
+    "auth_failure",
+    (message) => {
+
+      log(
+        `AUTH FAILURE ${deviceId}:`,
+        message
+      );
+
+      updateDevice(
+        deviceId,
+        {
+          status: "error",
+          qr: "",
+
+          error:
+            `AUTH_FAILURE: ${
+              message ||
+              "Unknown error"
+            }`
+        }
+      );
+    }
+  );
+
+  // ==========================================================
+  // DISCONNECTED
+  // ==========================================================
+
+  client.on(
+    "disconnected",
+    (reason) => {
+
+      log(
+        `DEVICE DISCONNECTED ${deviceId}:`,
+        reason
+      );
+
+      clients.delete(
+        deviceId
+      );
+
+      updateDevice(
+        deviceId,
+        {
+          status:
+            "disconnected",
+
+          qr: "",
+
+          error:
+            String(
+              reason ||
+              "Disconnected"
+            )
+        }
+      );
+    }
+  );
+
+  // ==========================================================
   // INITIALIZE
-  // ----------------------------------------------------------
+  // ==========================================================
 
   try {
-    log(`Initializing WhatsApp: ${deviceId}`);
+
+    log(
+      `INITIALIZING WHATSAPP: ${deviceId}`
+    );
 
     await client.initialize();
 
     log(
-      `Initialize finished: ${deviceId}`
+      `INITIALIZE FINISHED: ${deviceId}`
     );
+
   } catch (error) {
+
     log(
       `INITIALIZE ERROR ${deviceId}:`,
-      error.stack || error.message
+      error.stack ||
+        error.message
     );
 
-    clients.delete(deviceId);
+    clients.delete(
+      deviceId
+    );
 
-    updateDevice(deviceId, {
-      status: "error",
-      qr: "",
-      error: `INITIALIZE_ERROR: ${error.message}`,
-    });
+    updateDevice(
+      deviceId,
+      {
+        status: "error",
+        qr: "",
+
+        error:
+          `INITIALIZE_ERROR: ${error.message}`
+      }
+    );
 
     throw error;
   }
-}
-
-// ============================================================
-// WHATSAPP STATE
-// ============================================================
-
-async function getWhatsAppState(deviceId) {
-  const client = clients.get(deviceId);
-
-  if (!client) {
-    return null;
-  }
-
-  try {
-    return await client.getState();
-  } catch (error) {
-    return null;
-  }
-}
-
-// ============================================================
-// NORMALIZE NUMBER
-// ============================================================
-
-function normalizeNumber(number) {
-  const digits = String(number || "")
-    .replace(/\D/g, "");
-
-  if (
-    digits.length < 8 ||
-    digits.length > 15
-  ) {
-    return null;
-  }
-
-  return `${digits}@c.us`;
 }
 
 // ============================================================
@@ -446,165 +669,301 @@ function normalizeNumber(number) {
 app.get(
   "/health",
   async (req, res) => {
+
     const deviceList = [];
 
-    for (const [
-      deviceId,
-      data,
-    ] of devices.entries()) {
+    for (
+      const [
+        deviceId,
+        data
+      ]
+      of devices.entries()
+    ) {
+
       let waState = null;
 
-      if (data.status === "ready") {
+      if (
+        data.status === "ready"
+      ) {
         waState =
-          await getWhatsAppState(deviceId);
+          await getWhatsAppState(
+            deviceId
+          );
       }
 
       deviceList.push({
         deviceId,
-        status: data.status,
-        number: data.number || "",
-        name: data.name || "",
+
+        status:
+          data.status,
+
+        number:
+          data.number || "",
+
+        name:
+          data.name || "",
+
         waState,
-        error: data.error || "",
+
+        error:
+          data.error || ""
       });
     }
 
-    res.json({
+    return res.json({
       status: "ok",
+
       node: NODE_ID,
-      uptime: Math.floor(
-        process.uptime()
-      ),
-      totalDevices: clients.size,
-      maxDevices: MAX_DEVICES,
-      devices: deviceList,
+
+      uptime:
+        Math.floor(
+          process.uptime()
+        ),
+
+      totalDevices:
+        clients.size,
+
+      maxDevices:
+        MAX_DEVICES,
+
+      chromePath:
+        getChromePath() || "",
+
+      devices:
+        deviceList
     });
   }
 );
 
 // ============================================================
 // CREATE DEVICE
-//
-// GET /create-device?deviceId=testqr123
 // ============================================================
 
-app.get("/create-device", async (req, res) => {
-  res.set({
-    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
-  });
+app.get(
+  "/create-device",
+  async (req, res) => {
 
-  const deviceId = String(req.query.deviceId || "");
+    res.set({
+      "Cache-Control":
+        "no-store, no-cache, must-revalidate, max-age=0",
 
-  if (!validDeviceId(deviceId)) {
-    return res.status(400).json({
-      status: "failed",
-      message:
-        "Invalid deviceId. Use only letters, numbers, _ or -",
+      "Pragma":
+        "no-cache",
+
+      "Expires":
+        "0"
     });
-  }
 
-  if (clients.has(deviceId)) {
-    const data = getDevice(deviceId);
+    const deviceId =
+      String(
+        req.query.deviceId || ""
+      );
 
-    return res.json({
-      status: "already_exists",
+    if (
+      !validDeviceId(deviceId)
+    ) {
+      return res.status(400).json({
+        status: "failed",
+
+        message:
+          "Invalid deviceId. Use only letters, numbers, _ or -"
+      });
+    }
+
+    if (
+      clients.has(deviceId)
+    ) {
+
+      const data =
+        getDevice(deviceId);
+
+      return res.json({
+        status:
+          "already_exists",
+
+        deviceId,
+
+        deviceStatus:
+          data?.status ||
+          "unknown",
+
+        ready:
+          data?.status ===
+          "ready",
+
+        qrAvailable:
+          Boolean(
+            data?.qr
+          ),
+
+        error:
+          data?.error || ""
+      });
+    }
+
+    if (
+      clients.size >= MAX_DEVICES
+    ) {
+      return res.status(400).json({
+        status: "failed",
+
+        message:
+          `Maximum ${MAX_DEVICES} devices reached`
+      });
+    }
+
+    updateDevice(
       deviceId,
-      deviceStatus: data?.status || "unknown",
-      ready: data?.status === "ready",
-      qrAvailable: Boolean(data?.qr),
-    });
-  }
+      {
+        status:
+          "creating",
 
-  if (clients.size >= MAX_DEVICES) {
-    return res.status(400).json({
-      status: "failed",
-      message: `Maximum ${MAX_DEVICES} devices reached`,
-    });
-  }
-
-  // Create immediately in memory
-  updateDevice(deviceId, {
-    status: "creating",
-    qr: "",
-    error: "",
-    number: "",
-    name: "",
-  });
-
-  // Background initialize
-  createDevice(deviceId).catch((error) => {
-    console.error(
-      `BACKGROUND CREATE ERROR ${deviceId}:`,
-      error.stack || error.message
+        qr: "",
+        error: "",
+        number: "",
+        name: ""
+      }
     );
 
-    updateDevice(deviceId, {
-      status: "error",
-      qr: "",
-      error: error.message || "Failed to initialize WhatsApp",
-    });
-  });
+    createDevice(deviceId)
+      .catch((error) => {
 
-  return res.json({
-    status: "creating",
-    deviceId,
-    node: NODE_ID,
-  });
-});
+        log(
+          `BACKGROUND CREATE ERROR ${deviceId}:`,
+          error.stack ||
+            error.message
+        );
+
+        updateDevice(
+          deviceId,
+          {
+            status:
+              "error",
+
+            qr: "",
+
+            error:
+              error.message ||
+              "Failed to initialize WhatsApp"
+          }
+        );
+      });
+
+    return res.json({
+      status:
+        "creating",
+
+      deviceId,
+
+      node:
+        NODE_ID
+    });
+  }
+);
 
 // ============================================================
 // GET QR
-//
-// GET /get-qr?deviceId=testqr123
 // ============================================================
 
-app.get("/get-qr", (req, res) => {
-  // IMPORTANT: QR response kabhi cache nahi hona chahiye
-  res.set({
-    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
-    "Pragma": "no-cache",
-    "Expires": "0",
-  });
+app.get(
+  "/get-qr",
+  (req, res) => {
 
-  const deviceId = String(req.query.deviceId || "");
+    res.set({
+      "Cache-Control":
+        "no-store, no-cache, must-revalidate, max-age=0",
 
-  if (!validDeviceId(deviceId)) {
-    return res.status(400).json({
-      status: "failed",
-      message: "Invalid deviceId",
-      qr: "",
-      ready: false,
-      exists: false,
-      error: "",
+      "Pragma":
+        "no-cache",
+
+      "Expires":
+        "0"
     });
-  }
 
-  const data = getDevice(deviceId);
-  const client = clients.get(deviceId);
+    const deviceId =
+      String(
+        req.query.deviceId || ""
+      );
 
-  if (!data) {
+    if (
+      !validDeviceId(deviceId)
+    ) {
+      return res.status(400).json({
+        status:
+          "failed",
+
+        deviceId,
+
+        qr: "",
+
+        ready:
+          false,
+
+        exists:
+          false,
+
+        error:
+          "Invalid deviceId"
+      });
+    }
+
+    const data =
+      getDevice(deviceId);
+
+    const client =
+      clients.get(deviceId);
+
+    if (!data) {
+      return res.json({
+        status:
+          "not_found",
+
+        deviceId,
+
+        qr: "",
+
+        ready:
+          false,
+
+        exists:
+          false,
+
+        error: ""
+      });
+    }
+
     return res.json({
-      status: "not_found",
+      status:
+        data.status ||
+        "creating",
+
       deviceId,
-      qr: "",
-      ready: false,
-      exists: false,
-      error: "",
+
+      qr:
+        data.qr || "",
+
+      ready:
+        data.status ===
+        "ready",
+
+      exists:
+        Boolean(client),
+
+      error:
+        data.error || "",
+
+      number:
+        data.number || "",
+
+      name:
+        data.name || "",
+
+      updatedAt:
+        data.updatedAt ||
+        now()
     });
   }
-
-  return res.json({
-    status: data.status || "creating",
-    deviceId,
-    qr: data.qr || "",
-    ready: data.status === "ready",
-    exists: Boolean(client),
-    error: data.error || "",
-    number: data.number || "",
-    name: data.name || "",
-    updatedAt: data.updatedAt || now(),
-  });
-});
+);
 
 // ============================================================
 // GET DEVICE
@@ -613,39 +972,77 @@ app.get("/get-qr", (req, res) => {
 app.get(
   "/get-device",
   async (req, res) => {
-    const deviceId = String(
-      req.query.deviceId || ""
-    );
+
+    res.set({
+      "Cache-Control":
+        "no-store, no-cache, must-revalidate, max-age=0"
+    });
+
+    const deviceId =
+      String(
+        req.query.deviceId || ""
+      );
+
+    if (
+      !validDeviceId(deviceId)
+    ) {
+      return res.status(400).json({
+        status:
+          "failed",
+
+        message:
+          "Invalid deviceId"
+      });
+    }
 
     const data =
       getDevice(deviceId);
 
     if (!data) {
       return res.json({
-        status: "not_found",
-        ready: false,
+        deviceId,
+
+        status:
+          "not_found",
+
+        ready:
+          false,
+
+        error: ""
       });
     }
 
     const waState =
-      await getWhatsAppState(deviceId);
+      await getWhatsAppState(
+        deviceId
+      );
 
     return res.json({
       deviceId,
-      status: data.status,
+
+      status:
+        data.status,
+
       ready:
-        data.status === "ready",
+        data.status ===
+        "ready",
+
       number:
         data.number || "",
+
       name:
         data.name || "",
+
       waState,
+
       error:
         data.error || "",
+
       createdAt:
         data.createdAt,
+
       updatedAt:
-        data.updatedAt,
+        data.updatedAt
     });
   }
 );
@@ -657,33 +1054,58 @@ app.get(
 app.get(
   "/device-state",
   async (req, res) => {
-    const deviceId = String(
-      req.query.deviceId || ""
-    );
+
+    const deviceId =
+      String(
+        req.query.deviceId || ""
+      );
+
+    if (
+      !validDeviceId(deviceId)
+    ) {
+      return res.status(400).json({
+        status:
+          "failed",
+
+        message:
+          "Invalid deviceId"
+      });
+    }
 
     const data =
       getDevice(deviceId);
 
     if (!data) {
       return res.status(404).json({
-        status: "not_found",
+        status:
+          "not_found"
       });
     }
 
     const waState =
-      await getWhatsAppState(deviceId);
+      await getWhatsAppState(
+        deviceId
+      );
 
     return res.json({
       deviceId,
+
       backendStatus:
         data.status,
+
       waState,
+
       ready:
-        data.status === "ready",
+        data.status ===
+        "ready",
+
       hasQr:
-        Boolean(data.qr),
+        Boolean(
+          data.qr
+        ),
+
       error:
-        data.error || "",
+        data.error || ""
     });
   }
 );
@@ -695,30 +1117,47 @@ app.get(
 app.get(
   "/list-devices",
   (req, res) => {
+
     const list = [];
 
-    for (const [
-      deviceId,
-      data,
-    ] of devices.entries()) {
+    for (
+      const [
+        deviceId,
+        data
+      ]
+      of devices.entries()
+    ) {
+
       list.push({
         deviceId,
-        status: data.status,
+
+        status:
+          data.status,
+
         ready:
-          data.status === "ready",
+          data.status ===
+          "ready",
+
         number:
           data.number || "",
+
         name:
           data.name || "",
+
         error:
-          data.error || "",
+          data.error || ""
       });
     }
 
     return res.json({
-      devices: list,
-      total: list.length,
-      node: NODE_ID,
+      devices:
+        list,
+
+      total:
+        list.length,
+
+      node:
+        NODE_ID
     });
   }
 );
@@ -730,14 +1169,21 @@ app.get(
 app.get(
   "/delete-device",
   async (req, res) => {
-    const deviceId = String(
-      req.query.deviceId || ""
-    );
 
-    if (!validDeviceId(deviceId)) {
+    const deviceId =
+      String(
+        req.query.deviceId || ""
+      );
+
+    if (
+      !validDeviceId(deviceId)
+    ) {
       return res.status(400).json({
-        status: "failed",
-        message: "Invalid deviceId",
+        status:
+          "failed",
+
+        message:
+          "Invalid deviceId"
       });
     }
 
@@ -746,7 +1192,8 @@ app.get(
       !devices.has(deviceId)
     ) {
       return res.json({
-        status: "not_found",
+        status:
+          "not_found"
       });
     }
 
@@ -756,8 +1203,10 @@ app.get(
     );
 
     return res.json({
-      status: "deleted",
-      deviceId,
+      status:
+        "deleted",
+
+      deviceId
     });
   }
 );
@@ -769,22 +1218,28 @@ app.get(
 app.get(
   "/logout",
   async (req, res) => {
-    const deviceId = String(
-      req.query.deviceId || ""
-    );
+
+    const deviceId =
+      String(
+        req.query.deviceId || ""
+      );
 
     const client =
       clients.get(deviceId);
 
     if (!client) {
       return res.json({
-        status: "not_found",
+        status:
+          "not_found"
       });
     }
 
     try {
+
       await client.logout();
+
     } catch (error) {
+
       log(
         `Logout error ${deviceId}:`,
         error.message
@@ -797,69 +1252,78 @@ app.get(
     );
 
     return res.json({
-      status: "logged_out",
-      deviceId,
+      status:
+        "logged_out",
+
+      deviceId
     });
   }
 );
 
 // ============================================================
 // SEND SINGLE MESSAGE
-//
-// POST /send-single
-//
-// {
-//   "deviceId": "testqr123",
-//   "number": "919999999999",
-//   "message": "Hello"
-// }
 // ============================================================
 
 app.post(
   "/send-single",
   async (req, res) => {
-    const deviceId = String(
-      req.body.deviceId || ""
-    );
+
+    const deviceId =
+      String(
+        req.body.deviceId || ""
+      );
 
     const number =
       normalizeNumber(
         req.body.number
       );
 
-    const message = String(
-      req.body.message || ""
-    ).trim();
+    const message =
+      String(
+        req.body.message || ""
+      ).trim();
 
-    if (!validDeviceId(deviceId)) {
+    if (
+      !validDeviceId(deviceId)
+    ) {
       return res.status(400).json({
-        status: "failed",
+        status:
+          "failed",
+
         message:
-          "Valid deviceId required",
+          "Valid deviceId required"
       });
     }
 
     if (!number) {
       return res.status(400).json({
-        status: "failed",
+        status:
+          "failed",
+
         message:
-          "Valid number required",
+          "Valid number required"
       });
     }
 
     if (!message) {
       return res.status(400).json({
-        status: "failed",
+        status:
+          "failed",
+
         message:
-          "Message required",
+          "Message required"
       });
     }
 
-    if (message.length > 4096) {
+    if (
+      message.length > 4096
+    ) {
       return res.status(400).json({
-        status: "failed",
+        status:
+          "failed",
+
         message:
-          "Message too long",
+          "Message too long"
       });
     }
 
@@ -875,13 +1339,16 @@ app.post(
       data.status !== "ready"
     ) {
       return res.status(409).json({
-        status: "failed",
+        status:
+          "failed",
+
         message:
-          "Device is not ready",
+          "Device is not ready"
       });
     }
 
     try {
+
       const waState =
         await getWhatsAppState(
           deviceId
@@ -889,12 +1356,15 @@ app.post(
 
       if (
         waState &&
-        waState !== "CONNECTED"
+        waState !==
+          "CONNECTED"
       ) {
         return res.status(409).json({
-          status: "failed",
+          status:
+            "failed",
+
           message:
-            `WhatsApp not connected: ${waState}`,
+            `WhatsApp not connected: ${waState}`
         });
       }
 
@@ -905,9 +1375,11 @@ app.post(
 
       if (!registered) {
         return res.json({
-          status: "nonwa",
+          status:
+            "nonwa",
+
           message:
-            "Number is not registered on WhatsApp",
+            "Number is not registered on WhatsApp"
         });
       }
 
@@ -918,101 +1390,178 @@ app.post(
         );
 
       return res.json({
-        status: "sent",
+        status:
+          "sent",
+
         messageId:
-          result?.id?._serialized || "",
+          result?.id?._serialized ||
+          ""
       });
+
     } catch (error) {
+
       log(
         "SEND ERROR:",
-        error.stack || error.message
+        error.stack ||
+          error.message
       );
 
       return res.status(500).json({
-        status: "failed",
+        status:
+          "failed",
+
         message:
-          error.message || "Send failed",
+          error.message ||
+          "Send failed"
       });
     }
   }
 );
-
-
-
-const multer = require("multer");
-
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: {
-    fileSize: 50 * 1024 * 1024,
-  },
-});
-
+// ============================================================
+// SEND BULK
+// ============================================================
 
 app.post(
   "/send-bulk",
-  upload.array("files", 20),
+
+  upload.array(
+    "files",
+    20
+  ),
+
   async (req, res) => {
+
     try {
-      console.log("SEND BULK BODY:", req.body);
-      console.log(
+
+      log(
+        "SEND BULK BODY:",
+        req.body
+      );
+
+      log(
         "SEND BULK FILES:",
         req.files?.length || 0
       );
 
-      // Frontend FormData se multiple numbers
-      let numbers = req.body.numbers;
+      // ======================================================
+      // NUMBERS
+      // ======================================================
+
+      let numbers =
+        req.body.numbers;
 
       if (!numbers) {
         return res.status(400).json({
-          status: "failed",
-          message: "No numbers received",
+          status:
+            "failed",
+
+          message:
+            "No numbers received"
         });
       }
 
-      // Single number ko array banao
-      if (!Array.isArray(numbers)) {
-        numbers = [numbers];
+      // If JSON string was sent
+      if (
+        typeof numbers ===
+          "string" &&
+        numbers.startsWith("[")
+      ) {
+        try {
+          numbers =
+            JSON.parse(numbers);
+        } catch (error) {
+          // Keep as normal string
+        }
       }
 
-      numbers = numbers
-        .map((n) => String(n).trim())
-        .filter(Boolean);
+      if (
+        !Array.isArray(numbers)
+      ) {
+        numbers =
+          String(numbers)
+            .split(/[\n,\r]+/)
+            .map((n) =>
+              n.trim()
+            )
+            .filter(Boolean);
+      }
 
-      const message = String(
-        req.body.message || ""
-      ).trim();
+      numbers =
+        numbers
+          .map((n) =>
+            String(n).trim()
+          )
+          .filter(Boolean);
 
-      const visitUrl = String(
-        req.body.visitUrl || ""
-      ).trim();
+      // ======================================================
+      // MESSAGE
+      // ======================================================
 
-      const callNumber = String(
-        req.body.callNumber || ""
-      )
-        .replace(/\D/g, "")
-        .trim();
+      const message =
+        String(
+          req.body.message || ""
+        ).trim();
 
-      // Validate Visit URL
+      // ======================================================
+      // VISIT URL
+      // ======================================================
+
+      const visitUrl =
+        String(
+          req.body.visitUrl || ""
+        ).trim();
+
+      // ======================================================
+      // CALL NUMBER
+      // ======================================================
+
+      const callNumber =
+        String(
+          req.body.callNumber || ""
+        )
+          .replace(/\D/g, "")
+          .trim();
+
+      // ======================================================
+      // VALIDATE URL
+      // ======================================================
+
       if (visitUrl) {
+
         try {
-          const parsedUrl = new URL(visitUrl);
+
+          const parsedUrl =
+            new URL(
+              visitUrl
+            );
 
           if (
-            parsedUrl.protocol !== "http:" &&
-            parsedUrl.protocol !== "https:"
+            parsedUrl.protocol !==
+              "http:" &&
+            parsedUrl.protocol !==
+              "https:"
           ) {
-            throw new Error("Invalid URL");
+            throw new Error(
+              "Invalid URL"
+            );
           }
+
         } catch (error) {
+
           return res.status(400).json({
-            status: "failed",
-            message: "Invalid Visit Now URL",
+            status:
+              "failed",
+
+            message:
+              "Invalid Visit Now URL"
           });
         }
       }
 
-      // Validate Call Number
+      // ======================================================
+      // VALIDATE CALL NUMBER
+      // ======================================================
+
       if (
         callNumber &&
         (
@@ -1021,21 +1570,22 @@ app.post(
         )
       ) {
         return res.status(400).json({
-          status: "failed",
-          message: "Invalid Call Now number",
+          status:
+            "failed",
+
+          message:
+            "Invalid Call Now number"
         });
       }
 
-      // =====================================================
-      // ✨ BUILD PREMIUM WHATSAPP CAMPAIGN MESSAGE
-      // =====================================================
+      // ======================================================
+      // BUILD MESSAGE
+      // ======================================================
 
-      let finalMessage = String(message || "").trim();
-
-
-      // =====================================================
-      // 🌐 PREMIUM WEBSITE CTA
-      // =====================================================
+      let finalMessage =
+        String(
+          message || ""
+        ).trim();
 
       if (visitUrl) {
 
@@ -1043,13 +1593,7 @@ app.post(
           `${finalMessage ? "\n\n" : ""}` +
           `🔗 *${visitUrl}*\n\n` +
           `👉 _Tap the link above to visit now_`;
-
       }
-
-
-      // =====================================================
-      // 📞 PREMIUM Call CTA
-      // =====================================================
 
       if (callNumber) {
 
@@ -1059,53 +1603,80 @@ app.post(
           `👉 _Tap the number above to connect with us_`;
       }
 
-
-      // =====================================================
-      // CONNECTED DEVICE FIND
-      // =====================================================
+      // ======================================================
+      // FIND READY DEVICES
+      // ======================================================
 
       const readyDevices = [];
 
-      for (const [deviceId, device] of devices.entries()) {
-        const client = clients.get(deviceId);
+      for (
+        const [
+          deviceId,
+          device
+        ]
+        of devices.entries()
+      ) {
+
+        const client =
+          clients.get(
+            deviceId
+          );
 
         if (
           client &&
           device &&
-          device.status === "ready"
+          device.status ===
+            "ready"
         ) {
+
           readyDevices.push({
             deviceId,
-            client,
+            client
           });
         }
       }
 
-      if (readyDevices.length === 0) {
-        return res.status(200).json({
-          status: "no_device",
-          message: "No WhatsApp device connected",
+      if (
+        readyDevices.length === 0
+      ) {
+        return res.json({
+          status:
+            "no_device",
+
+          message:
+            "No WhatsApp device connected"
         });
       }
 
-      if (numbers.length === 0) {
+      if (
+        numbers.length === 0
+      ) {
         return res.status(400).json({
-          status: "failed",
-          message: "No valid numbers received",
+          status:
+            "failed",
+
+          message:
+            "No valid numbers received"
         });
       }
 
       if (
         !finalMessage &&
-        (!req.files || req.files.length === 0)
+        (
+          !req.files ||
+          req.files.length === 0
+        )
       ) {
         return res.status(400).json({
-          status: "failed",
-          message: "Message or media is required",
+          status:
+            "failed",
+
+          message:
+            "Message or media is required"
         });
       }
 
-      console.log(
+      log(
         `Sending campaign to ${numbers.length} numbers using ${readyDevices.length} device(s)`
       );
 
@@ -1113,27 +1684,41 @@ app.post(
 
       let deviceIndex = 0;
 
-      // =====================================================
+      // ======================================================
       // SEND LOOP
-      // =====================================================
+      // ======================================================
 
-      for (const rawNumber of numbers) {
-        let number = String(rawNumber)
-          .replace(/\D/g, "");
+      for (
+        const rawNumber
+        of numbers
+      ) {
 
-        // Indian 10 digit number → add 91
-        if (number.length === 10) {
-          number = `91${number}`;
+        let number =
+          String(rawNumber)
+            .replace(/\D/g, "");
+
+        // Indian 10-digit number
+        if (
+          number.length === 10
+        ) {
+          number =
+            `91${number}`;
         }
 
         if (
           number.length < 8 ||
           number.length > 15
         ) {
+
           results.push({
-            number: rawNumber,
-            status: "invalid",
-            error: "Invalid phone number",
+            number:
+              rawNumber,
+
+            status:
+              "invalid",
+
+            error:
+              "Invalid phone number"
           });
 
           continue;
@@ -1142,12 +1727,15 @@ app.post(
         // Round-robin device
         const selected =
           readyDevices[
-          deviceIndex % readyDevices.length
+            deviceIndex %
+            readyDevices.length
           ];
 
         deviceIndex++;
 
-        const client = selected.client;
+        const client =
+          selected.client;
+
         const deviceId =
           selected.deviceId;
 
@@ -1155,7 +1743,8 @@ app.post(
           `${number}@c.us`;
 
         try {
-          console.log(
+
+          log(
             `Checking ${number} using ${deviceId}`
           );
 
@@ -1165,57 +1754,70 @@ app.post(
             );
 
           if (!registered) {
+
             results.push({
               number,
               deviceId,
-              status: "nonwa",
+
+              status:
+                "nonwa"
             });
 
             continue;
           }
 
-          // ===============================================
-          // MEDIA + MESSAGE CAPTION
-          // ===============================================
+          // ==================================================
+          // MEDIA
+          // ==================================================
 
           if (
             req.files &&
             req.files.length > 0
           ) {
 
-            const { MessageMedia } =
-              require("whatsapp-web.js");
-
             let mediaIndex = 0;
 
-            for (const file of req.files) {
+            for (
+              const file
+              of req.files
+            ) {
 
               const media =
                 new MessageMedia(
                   file.mimetype,
-                  file.buffer.toString("base64"),
+                  file.buffer.toString(
+                    "base64"
+                  ),
                   file.originalname
                 );
 
               const isImage =
-                file.mimetype.startsWith("image/");
+                file.mimetype.startsWith(
+                  "image/"
+                );
 
               const isVideo =
-                file.mimetype.startsWith("video/");
+                file.mimetype.startsWith(
+                  "video/"
+                );
 
               const options = {
                 sendMediaAsDocument:
-                  !isImage && !isVideo,
+                  !isImage &&
+                  !isVideo
               };
 
-              // FIRST IMAGE / VIDEO KE SAATH
-              // PURA MESSAGE + VISIT URL + CALL NUMBER
+              // First image/video gets caption
               if (
                 mediaIndex === 0 &&
                 finalMessage &&
-                (isImage || isVideo)
+                (
+                  isImage ||
+                  isVideo
+                )
               ) {
-                options.caption = finalMessage;
+                options.caption =
+                  finalMessage;
               }
 
               await client.sendMessage(
@@ -1226,35 +1828,36 @@ app.post(
 
               mediaIndex++;
 
-              await new Promise(
-                (resolve) =>
-                  setTimeout(resolve, 500)
-              );
+              await sleep(500);
             }
 
-          } else if (finalMessage) {
+          } else if (
+            finalMessage
+          ) {
 
-            // =================================================
-            // AGAR MEDIA NAHI HAI TO NORMAL MESSAGE
-            // =================================================
+            // No media -> normal message
 
             await client.sendMessage(
               chatId,
               finalMessage
             );
           }
+
           results.push({
             number,
             deviceId,
-            status: "sent",
+
+            status:
+              "sent"
           });
 
-          console.log(
+          log(
             `SUCCESS: ${number}`
           );
 
         } catch (error) {
-          console.error(
+
+          log(
             `FAILED ${number}:`,
             error.message
           );
@@ -1262,76 +1865,92 @@ app.post(
           results.push({
             number,
             deviceId,
-            status: "failed",
+
+            status:
+              "failed",
+
             error:
               error.message ||
-              "Message send failed",
+              "Message send failed"
           });
         }
 
         // Gap between recipients
-        await new Promise(
-          (resolve) =>
-            setTimeout(
-              resolve,
-              1200
-            )
-        );
+        await sleep(1200);
       }
 
-      // =====================================================
+      // ======================================================
       // SUMMARY
-      // =====================================================
+      // ======================================================
 
-      const sent = results.filter(
-        (r) =>
-          r.status === "sent"
-      ).length;
+      const sent =
+        results.filter(
+          (item) =>
+            item.status ===
+            "sent"
+        ).length;
 
-      const failed = results.filter(
-        (r) =>
-          r.status === "failed"
-      ).length;
+      const failed =
+        results.filter(
+          (item) =>
+            item.status ===
+            "failed"
+        ).length;
 
-      const nonwa = results.filter(
-        (r) =>
-          r.status === "nonwa"
-      ).length;
+      const nonwa =
+        results.filter(
+          (item) =>
+            item.status ===
+            "nonwa"
+        ).length;
 
-      const invalid = results.filter(
-        (r) =>
-          r.status === "invalid"
-      ).length;
+      const invalid =
+        results.filter(
+          (item) =>
+            item.status ===
+            "invalid"
+        ).length;
 
-      console.log({
-        total: results.length,
+      log({
+        total:
+          results.length,
+
         sent,
         failed,
         nonwa,
-        invalid,
+        invalid
       });
 
       return res.json({
-        status: "completed",
-        total: results.length,
+        status:
+          "completed",
+
+        total:
+          results.length,
+
         sent,
         failed,
         nonwa,
         invalid,
-        results,
+
+        results
       });
 
     } catch (error) {
-      console.error(
+
+      log(
         "SEND BULK FATAL ERROR:",
-        error.stack || error.message
+        error.stack ||
+          error.message
       );
 
       return res.status(500).json({
-        status: "failed",
+        status:
+          "failed",
+
         message:
           error.message ||
-          "Bulk send failed",
+          "Bulk send failed"
       });
     }
   }
@@ -1342,13 +1961,18 @@ app.post(
 // ============================================================
 
 async function restoreSessions() {
-  const authDir = path.join(
-    __dirname,
-    "sessions",
-    ".wwebjs_auth"
-  );
 
-  if (!fs.existsSync(authDir)) {
+  // IMPORTANT:
+  // Same AUTH_PATH used by LocalAuth
+  // This fixes old sessions path mismatch.
+
+  const authDir =
+    AUTH_PATH;
+
+  if (
+    !fs.existsSync(authDir)
+  ) {
+
     log(
       "No previous sessions found"
     );
@@ -1357,37 +1981,60 @@ async function restoreSessions() {
   }
 
   const folders =
-    fs.readdirSync(authDir)
-      .filter((folder) =>
-        folder.startsWith("session-")
+    fs.readdirSync(
+      authDir
+    )
+      .filter(
+        (folder) =>
+          folder.startsWith(
+            "session-"
+          )
       );
 
   log(
     `Restoring ${folders.length} saved session(s)`
   );
 
-  for (const folder of folders) {
+  for (
+    const folder
+    of folders
+  ) {
+
     const deviceId =
       folder.replace(
         /^session-/,
         ""
       );
 
-    if (!validDeviceId(deviceId)) {
+    if (
+      !validDeviceId(deviceId)
+    ) {
       continue;
     }
 
     try {
-      createDevice(deviceId)
-        .catch((error) => {
+
+      log(
+        `Restoring device: ${deviceId}`
+      );
+
+      createDevice(
+        deviceId
+      ).catch(
+        (error) => {
+
           log(
             `RESTORE ERROR ${deviceId}:`,
             error.message
           );
-        });
+        }
+      );
 
+      // Don't start all Chrome instances together
       await sleep(2000);
+
     } catch (error) {
+
       log(
         `RESTORE SETUP ERROR ${deviceId}:`,
         error.message
@@ -1401,17 +2048,32 @@ async function restoreSessions() {
 // ============================================================
 
 app.use(
-  (error, req, res, next) => {
+  (
+    error,
+    req,
+    res,
+    next
+  ) => {
+
     log(
       "EXPRESS ERROR:",
-      error.stack || error.message
+      error.stack ||
+        error.message
     );
 
-    res.status(500).json({
-      status: "failed",
+    if (
+      res.headersSent
+    ) {
+      return next(error);
+    }
+
+    return res.status(500).json({
+      status:
+        "failed",
+
       message:
         error.message ||
-        "Internal server error",
+        "Internal server error"
     });
   }
 );
@@ -1424,6 +2086,7 @@ app.listen(
   PORT,
   "0.0.0.0",
   async () => {
+
     log(
       `Server started on port ${PORT}`
     );
@@ -1436,7 +2099,29 @@ app.listen(
       `Maximum devices: ${MAX_DEVICES}`
     );
 
-    await restoreSessions();
+    log(
+      `AUTH PATH: ${AUTH_PATH}`
+    );
+
+    log(
+      `Chrome Path: ${
+        getChromePath() ||
+        "NOT FOUND"
+      }`
+    );
+
+    try {
+
+      await restoreSessions();
+
+    } catch (error) {
+
+      log(
+        "SESSION RESTORE ERROR:",
+        error.stack ||
+          error.message
+      );
+    }
   }
 );
 
@@ -1444,16 +2129,33 @@ app.listen(
 // GRACEFUL SHUTDOWN
 // ============================================================
 
-async function shutdown(signal) {
+let shuttingDown = false;
+
+async function shutdown(
+  signal
+) {
+
+  if (shuttingDown) {
+    return;
+  }
+
+  shuttingDown = true;
+
   log(
     `${signal} received. Shutting down...`
   );
 
   await Promise.allSettled(
-    [...clients.values()].map(
+    [
+      ...clients.values()
+    ].map(
       (client) =>
         safeDestroy(client)
     )
+  );
+
+  log(
+    "All WhatsApp clients closed"
   );
 
   process.exit(0);
@@ -1461,20 +2163,28 @@ async function shutdown(signal) {
 
 process.on(
   "SIGINT",
-  () => shutdown("SIGINT")
+  () =>
+    shutdown("SIGINT")
 );
 
 process.on(
   "SIGTERM",
-  () => shutdown("SIGTERM")
+  () =>
+    shutdown("SIGTERM")
 );
+
+// ============================================================
+// UNHANDLED ERRORS
+// ============================================================
 
 process.on(
   "uncaughtException",
   (error) => {
+
     log(
       "UNCAUGHT EXCEPTION:",
-      error.stack || error.message
+      error.stack ||
+        error.message
     );
   }
 );
@@ -1482,6 +2192,7 @@ process.on(
 process.on(
   "unhandledRejection",
   (reason) => {
+
     log(
       "UNHANDLED REJECTION:",
       reason
