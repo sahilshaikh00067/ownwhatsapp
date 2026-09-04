@@ -52,19 +52,50 @@ app.use(
   })
 );
 
+// ============================================================
+// CORS
+// ============================================================
+
+const allowedOrigins = [
+  "https://ownwhatsapp.vercel.app",
+  "http://localhost:3000",
+  "http://127.0.0.1:3000"
+];
+
 app.use(
   cors({
-    origin: true,
+    origin: function (origin, callback) {
+
+      if (!origin) {
+        return callback(null, true);
+      }
+
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(
+        new Error(`CORS blocked for origin: ${origin}`)
+      );
+    },
+
     methods: [
       "GET",
       "POST",
+      "PUT",
+      "DELETE",
       "OPTIONS"
     ],
+
     allowedHeaders: [
       "Content-Type",
       "Authorization",
       "x-api-key"
-    ]
+    ],
+
+    credentials: false,
+
+    optionsSuccessStatus: 200
   })
 );
 
