@@ -127,14 +127,7 @@ const poll = async () => {
     const url =
       `https://ownwhatsapp-backend.onrender.com/get-qr?deviceId=${activeDevice}&_=${Date.now()}`;
 
-    const res = await fetch(url, {
-      method: "GET",
-      cache: "no-store",
-      headers: {
-        "Cache-Control": "no-cache",
-        "Pragma": "no-cache",
-      },
-    });
+   const res = await fetch(url);
 
     if (!res.ok) {
       console.log("QR API ERROR:", res.status);

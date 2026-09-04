@@ -9,13 +9,13 @@ import { useRef } from "react";
 // ─────────────────────────────────────────────
 const API_NODE = "https://ownwhatsapp-backend.onrender.com";
 const API_DJANGO = "https://ownwhatsapp-backend-django.onrender.com";
-const QUEUE_THRESHOLD = 20; // 🔥 numbers above this go to "pending" queue
+const QUEUE_THRESHOLD = 20; // 🔥 numbers above This go to "pending" queue
 
 // ─────────────────────────────────────────────
 // MODAL — memoized  never re-renders unless modal changes
 // ─────────────────────────────────────────────
 const MODAL_STYLES = {
-  success: { emoji: "🚀", bg: "from-green-500 to-emerald-600", border: "border-green-200", text: "text-green-700", light: "bg-green-50" },
+  success: { emoji: "🚀", bg: "from-green-500 to-emerald-500", border: "border-green-200", text: "text-green-700", light: "bg-green-50" },
   error: { emoji: "❌", bg: "from-red-500 to-rose-600", border: "border-red-200", text: "text-red-700", light: "bg-red-50" },
   warning: { emoji: "⚠️", bg: "from-orange-400 to-orange-500", border: "border-orange-200", text: "text-orange-700", light: "bg-orange-50" },
   info: { emoji: "⏳", bg: "from-green-500 to-green-600", border: "border-green-200", text: "text-green-700", light: "bg-green-50" },

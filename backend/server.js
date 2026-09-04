@@ -62,42 +62,41 @@ const allowedOrigins = [
   "http://127.0.0.1:3000"
 ];
 
-app.use(
-  cors({
-    origin: function (origin, callback) {
+app.use(cors({
+  origin: function (origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
 
-      if (!origin) {
-        return callback(null, true);
-      }
+    return callback(new Error(`CORS blocked for origin: ${origin} `));
 
-      if (allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
+  },
 
-      return callback(
-        new Error(`CORS blocked for origin: ${origin}`)
-      );
-    },
+  methods: [
+    "GET",
+    "POST",
+    "PUT",
+    "DELETE",
+    "OPTIONS"
+  ],
 
-    methods: [
-      "GET",
-      "POST",
-      "PUT",
-      "DELETE",
-      "OPTIONS"
-    ],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "x-api-key",
+    "Cache-Control",
+    "Pragma"
+  ],
 
-    allowedHeaders: [
-      "Content-Type",
-      "Authorization",
-      "x-api-key"
-    ],
+  exposedHeaders: [
+    "Content-Type"
+  ],
 
-    credentials: false,
+  credentials: false,
 
-    optionsSuccessStatus: 200
-  })
-);
+  optionsSuccessStatus: 204
+}));
+
 
 app.use(
   express.json({
@@ -581,7 +580,7 @@ async function createDevice(deviceId) {
       log(
         `DEVICE READY: ${deviceId}`,
         info?.wid?.user ||
-          "unknown"
+        "unknown"
       );
     }
   );
@@ -606,9 +605,8 @@ async function createDevice(deviceId) {
           qr: "",
 
           error:
-            `AUTH_FAILURE: ${
-              message ||
-              "Unknown error"
+            `AUTH_FAILURE: ${message ||
+            "Unknown error"
             }`
         }
       );
@@ -671,7 +669,7 @@ async function createDevice(deviceId) {
     log(
       `INITIALIZE ERROR ${deviceId}:`,
       error.stack ||
-        error.message
+      error.message
     );
 
     clients.delete(
@@ -862,7 +860,7 @@ app.get(
         log(
           `BACKGROUND CREATE ERROR ${deviceId}:`,
           error.stack ||
-            error.message
+          error.message
         );
 
         updateDevice(
@@ -1388,7 +1386,7 @@ app.post(
       if (
         waState &&
         waState !==
-          "CONNECTED"
+        "CONNECTED"
       ) {
         return res.status(409).json({
           status:
@@ -1434,7 +1432,7 @@ app.post(
       log(
         "SEND ERROR:",
         error.stack ||
-          error.message
+        error.message
       );
 
       return res.status(500).json({
@@ -1494,7 +1492,7 @@ app.post(
       // If JSON string was sent
       if (
         typeof numbers ===
-          "string" &&
+        "string" &&
         numbers.startsWith("[")
       ) {
         try {
@@ -1568,9 +1566,9 @@ app.post(
 
           if (
             parsedUrl.protocol !==
-              "http:" &&
+            "http:" &&
             parsedUrl.protocol !==
-              "https:"
+            "https:"
           ) {
             throw new Error(
               "Invalid URL"
@@ -1657,7 +1655,7 @@ app.post(
           client &&
           device &&
           device.status ===
-            "ready"
+          "ready"
         ) {
 
           readyDevices.push({
@@ -1758,8 +1756,8 @@ app.post(
         // Round-robin device
         const selected =
           readyDevices[
-            deviceIndex %
-            readyDevices.length
+          deviceIndex %
+          readyDevices.length
           ];
 
         deviceIndex++;
@@ -1972,7 +1970,7 @@ app.post(
       log(
         "SEND BULK FATAL ERROR:",
         error.stack ||
-          error.message
+        error.message
       );
 
       return res.status(500).json({
@@ -2089,7 +2087,7 @@ app.use(
     log(
       "EXPRESS ERROR:",
       error.stack ||
-        error.message
+      error.message
     );
 
     if (
@@ -2135,9 +2133,8 @@ app.listen(
     );
 
     log(
-      `Chrome Path: ${
-        getChromePath() ||
-        "NOT FOUND"
+      `Chrome Path: ${getChromePath() ||
+      "NOT FOUND"
       }`
     );
 
@@ -2150,7 +2147,7 @@ app.listen(
       log(
         "SESSION RESTORE ERROR:",
         error.stack ||
-          error.message
+        error.message
       );
     }
   }
@@ -2215,7 +2212,7 @@ process.on(
     log(
       "UNCAUGHT EXCEPTION:",
       error.stack ||
-        error.message
+      error.message
     );
   }
 );
