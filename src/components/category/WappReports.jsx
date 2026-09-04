@@ -9,7 +9,7 @@ const POLL_MS = 5000;
 const FILTERS = ["Today", "Yesterday", "Last 7 Days", "Last 30 Days", "This Month", "Last Month", "Custom Range"];
 
 // ─────────────────────────────────────────────
-// PURE HELPERS (outside component — never recreated)
+// PURE HELPERS (outside component  never recreated)
 // ─────────────────────────────────────────────
 function getUserId() {
   try {
@@ -130,7 +130,7 @@ const ExpandedRow = memo(({ entry, isAdmin }) => {
           {(entry.media || []).filter(f => f?.type?.includes("image")).length > 0 && (
             <div className="flex gap-2 flex-wrap mb-2">
               {entry.media.filter(f => f?.type?.includes("image")).map((img, i) => (
-                <img key={i} src={`https://ownwhatsapp-backend.onrender.com/uploads/${img.name}`}
+                <img key={i} src={`http://localhost:5000/uploads/${img.name}`}
                   className="w-20 h-20 object-cover border rounded" alt="" />
               ))}
             </div>
@@ -138,12 +138,12 @@ const ExpandedRow = memo(({ entry, isAdmin }) => {
 
           {(entry.media || []).filter(f => f?.type?.includes("video")).map((vid, i) => (
             <video key={i} controls className="w-32 mr-2">
-              <source src={`https://ownwhatsapp-backend.onrender.com/uploads/${vid.name}`} />
+              <source src={`http://localhost:5000/uploads/${vid.name}`} />
             </video>
           ))}
 
           {(entry.media || []).filter(f => f?.type?.includes("pdf")).map((pdf, i) => (
-            <a key={i} href={`https://ownwhatsapp-backend.onrender.com/uploads/${pdf.name}`}
+            <a key={i} href={`http://localhost:5000/uploads/${pdf.name}`}
               target="_blank" rel="noreferrer"
               className="inline-block bg-white border px-2 py-1 text-xs mr-2 mt-1">
               📄 {pdf.name}
@@ -173,7 +173,7 @@ const ExpandedRow = memo(({ entry, isAdmin }) => {
       {(entry.media || []).filter(f => f?.type?.includes("image")).length > 0 && (
         <div className="flex gap-2 flex-wrap mb-2">
           {entry.media.filter(f => f?.type?.includes("image")).map((img, i) => (
-            <img key={i} src={`https://ownwhatsapp-backend.onrender.com/uploads/${img.name}`}
+            <img key={i} src={`http://localhost:5000/uploads/${img.name}`}
               className="w-20 h-20 object-cover border rounded" alt="" />
           ))}
         </div>
@@ -181,12 +181,12 @@ const ExpandedRow = memo(({ entry, isAdmin }) => {
 
       {(entry.media || []).filter(f => f?.type?.includes("video")).map((vid, i) => (
         <video key={i} controls className="w-32 mr-2">
-          <source src={`https://ownwhatsapp-backend.onrender.com/uploads/${vid.name}`} />
+          <source src={`http://localhost:5000/uploads/${vid.name}`} />
         </video>
       ))}
 
       {(entry.media || []).filter(f => f?.type?.includes("pdf")).map((pdf, i) => (
-        <a key={i} href={`https://ownwhatsapp-backend.onrender.com/uploads/${pdf.name}`}
+        <a key={i} href={`http://localhost:5000/uploads/${pdf.name}`}
           target="_blank" rel="noreferrer"
           className="inline-block bg-white border px-2 py-1 text-xs mr-2 mt-1">
           📄 {pdf.name}

@@ -30,3 +30,28 @@ db.sqlite3
 # 🔥 VERY IMPORTANT
 .wwebjs_auth
 backend/.wwebjs_auth
+
+
+# WhatsApp sessions
+backend/sessions/
+backend/.wwebjs_auth/
+backend/.wwebjs_cache/
+
+# Chrome / Puppeteer temporary files
+backend/Default/
+backend/DevToolsActivePort
+
+# Node modules
+node_modules/
+backend/node_modules/
+
+# Environment
+.env
+backend/.env
+
+# Python
+__pycache__/
+*.pyc
+
+# Django
+db.sqlite3

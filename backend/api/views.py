@@ -15,7 +15,7 @@ from .models import User, Campaign, CreditLog
 
 # Numbers <= this are sent instantly by the Node server.
 # Numbers > this go into the admin-approval / "pending" queue.
-# NOTE: keep this in sync with QUEUE_THRESHOLD in the Node server's
+# NOTE: keep this in sync with QUEUE_THRESHOLD  the Node server's
 # CFG object, and with QUEUE_THRESHOLD in the React components.
 QUEUE_THRESHOLD = 20
 

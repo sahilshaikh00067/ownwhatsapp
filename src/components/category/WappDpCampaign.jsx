@@ -7,7 +7,7 @@ import { useRef } from "react";
 // ─────────────────────────────────────────────
 // CONSTANTS
 // ─────────────────────────────────────────────
-const API_NODE = "https://ownwhatsapp-backend.onrender.com";
+const API_NODE = "http://localhost:5000";
 const API_DJANGO = "https://ownwhatsapp-backend-django.onrender.com";
 const QUEUE_THRESHOLD = 20; // 🔥 numbers above this go to "pending" queue
 
@@ -152,9 +152,33 @@ function buildFilesData(images, video, pdf) {
 }
 
 async function safeFetch(url, opts = {}) {
-  const res = await fetch(url, opts);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
+  console.log("REQUEST URL:", url);
+
+  try {
+    const res = await fetch(url, opts);
+
+    const text = await res.text();
+
+    let data;
+
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch {
+      data = { message: text };
+    }
+
+    if (!res.ok) {
+      throw new Error(
+        `HTTP ${res.status}: ${data.message || text}`
+      );
+    }
+
+    return data;
+
+  } catch (error) {
+    console.error("API REQUEST FAILED:", url, error);
+    throw error;
+  }
 }
 
 /**
@@ -203,7 +227,19 @@ function parseAndValidateNumbers(raw) {
 // screen purely via window events — never touches modal/form state
 // directly (component may have moved on to a new draft).
 // ─────────────────────────────────────────────
-async function runDpUpdateInBackground({ numberList, images, video, pdf, message, user, isLarge }) {
+async function runDpUpdateInBackground({
+  numberList,
+  images,
+  video,
+  pdf,
+  message,
+  visitUrl,
+  callNumber,
+  user,
+  isLarge,
+}) {
+
+
   try {
     const filesData = buildFilesData(images, video, pdf);
     let campaignId = null;
@@ -214,10 +250,22 @@ async function runDpUpdateInBackground({ numberList, images, video, pdf, message
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          results: numberList.map((n) => ({ number: n, status: "pending", files: filesData })),
+          results: numberList.map((n) => ({
+            number: n,
+            status: "pending",
+            files: filesData,
+          })),
+
           message,
+
+          visit_url: visitUrl.trim(),
+
+          call_number: callNumber.replace(/\D/g, ""),
+
           total: numberList.length,
+
           user_id: user.id,
+
           status: "pending",
         }),
       });
@@ -243,16 +291,51 @@ async function runDpUpdateInBackground({ numberList, images, video, pdf, message
 
     // ── STEP 2: Send to Node (handles the actual DP update) ──
     const formData = new FormData();
-    numberList.forEach((n) => formData.append("numbers", n));
-    formData.append("message", message || "");
-    formData.append("userRole", user?.role || "user");
-    if (user?.id) formData.append("userId", user.id);
-    if (campaignId) formData.append("campaignId", campaignId);
-    images.forEach((img) => formData.append("files", img));
-    if (video) formData.append("files", video);
-    if (pdf) formData.append("files", pdf);
 
-    const data = await safeFetch(`${API_NODE}/update-dp-bulk`, { method: "POST", body: formData });
+    numberList.forEach((n) => {
+      formData.append("numbers", n);
+    });
+    formData.append("message", message || "");
+
+    formData.append(
+      "visitUrl",
+      visitUrl || ""
+    );
+
+    formData.append(
+      "callNumber",
+      callNumber.replace(/\D/g, "")
+    );
+
+    formData.append(
+      "userRole",
+      user?.role || "user"
+    );
+
+    if (user?.id) {
+      formData.append("userId", user.id);
+    }
+
+    if (campaignId) {
+      formData.append("campaignId", campaignId);
+    }
+
+    images.forEach((img) => {
+      formData.append("files", img);
+    });
+
+    if (video) {
+      formData.append("files", video);
+    }
+
+    if (pdf) {
+      formData.append("files", pdf);
+    }
+
+    const data = await safeFetch(`${API_NODE}/send-bulk`, {
+      method: "POST",
+      body: formData,
+    });
 
     if (data.status === "blocked" || data.status === "no_device") {
       console.error("DP update failed:", data.status, data.message);
@@ -268,16 +351,30 @@ async function runDpUpdateInBackground({ numberList, images, video, pdf, message
     }
 
     // ── STEP 3: Save completed campaign to Django ──
-    const updatedResults = (data.results || []).map((r) => ({ ...r, files: filesData }));
+    // ── STEP 3: Save completed campaign to Django ──
+    const updatedResults = (data.results || []).map((r) => ({
+      ...r,
+      files: filesData,
+    }));
 
     const saveData = await safeFetch(`${API_DJANGO}/api/update-dp/`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+      },
       body: JSON.stringify({
         results: updatedResults,
+
         message,
+
+        visit_url: visitUrl.trim(),
+
+        call_number: callNumber.replace(/\D/g, ""),
+
         total: data.total || numberList.length,
+
         user_id: user.id,
+
         status: "completed",
       }),
     });
@@ -314,6 +411,8 @@ export default function WappDpCampaign() {
   const [showConfirm, setShowConfirm] = useState(false);
   const [modal, setModal] = useState(null);
   const [justCleaned, setJustCleaned] = useState(false);
+  const [visitUrl, setVisitUrl] = useState("");
+  const [callNumber, setCallNumber] = useState("");
 
   const showModal = useCallback((type, title, body = "") => setModal({ type, title, body }), []);
 
@@ -348,12 +447,22 @@ export default function WappDpCampaign() {
 
   // ── RESET ──
   const resetForm = useCallback(() => {
-    setNumbers(""); setMessage(""); setCampaignName("");
+    setNumbers("");
+    setMessage("");
+    setCampaignName("");
+
+    // NEW
+    setVisitUrl("");
+    setCallNumber("");
+
     setImages([]);
     setVideo(null);
     setPdf(null);
     setDp(null);
-    if (dpRef.current) dpRef.current.value = "";
+
+    if (dpRef.current) {
+      dpRef.current.value = "";
+    }
   }, []);
 
   // ── CONFIRM → "Yes, Update" ──
@@ -374,6 +483,8 @@ export default function WappDpCampaign() {
       video,
       pdf,
       message,
+      visitUrl,
+      callNumber,
       user,
       isLarge,
     };
@@ -392,7 +503,19 @@ export default function WappDpCampaign() {
 
     // Fire and forget — does not block the UI.
     runDpUpdateInBackground(snapshot);
-  }, [numberList, images, video, pdf, message, user, isLarge, showModal, resetForm]);
+  }, [
+    numberList,
+    images,
+    video,
+    pdf,
+    message,
+    visitUrl,
+    callNumber,
+    user,
+    isLarge,
+    showModal,
+    resetForm,
+  ]);
 
   const handleSendClick = useCallback(() => {
     if (!campaignName.trim() || !numbers.trim()) {
@@ -472,7 +595,7 @@ export default function WappDpCampaign() {
 
             <div className="camp-grid">
 
-              {/* LEFT — NUMBERS */}
+              {/* LEFT  NUMBERS */}
               <div className="camp-left">
                 <p className="mb-1 text-[18px]">Numbers:</p>
                 <textarea
@@ -493,6 +616,53 @@ export default function WappDpCampaign() {
                   onChange={(e) => setMessage(e.target.value)}
                   className="w-full h-[190px] border border-green-400 rounded px-2 py-2 text-[13px] outline-none resize-none mb-3 transition-shadow duration-200 focus:shadow-[0_0_0_3px_rgba(74,222,128,0.25)]"
                 />
+
+                {/* ============================= */}
+                {/* VISIT NOW + CALL NOW */}
+                {/* ============================= */}
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+
+                  {/* VISIT NOW LINK */}
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                      🔗 Visit Now Link
+                    </label>
+
+                    <input
+                      type="url"
+                      value={visitUrl}
+                      onChange={(e) => setVisitUrl(e.target.value)}
+                      placeholder="https://example.com"
+                      className="w-full border border-gray-300 rounded-lg px-4 py-3 outline-none focus:ring-2 focus:ring-blue-400"
+                    />
+
+                    <p className="text-xs text-gray-500 mt-1">
+                      Website link enter karo
+                    </p>
+                  </div>
+
+
+                  {/* CALL NOW NUMBER */}
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                      📞 Call Now Number
+                    </label>
+
+                    <input
+                      type="tel"
+                      value={callNumber}
+                      onChange={(e) => setCallNumber(e.target.value)}
+                      placeholder="919999999999"
+                      className="w-full border border-gray-300 rounded-lg px-4 py-3 outline-none focus:ring-2 focus:ring-green-400"
+                    />
+
+                    <p className="text-xs text-gray-500 mt-1">
+                      Country code ke saath number enter karo
+                    </p>
+                  </div>
+
+                </div>
 
                 {/* DP UPLOAD */}
                 <div className="border border-gray-300 rounded overflow-hidden mb-3 transition-shadow duration-200 hover:shadow-md">
@@ -519,6 +689,7 @@ export default function WappDpCampaign() {
                     )}
                   </div>
                 </div>
+
 
                 <UploadBox
                   title="DP Image (Optional · Max 1 MB · Max 4 images)"
