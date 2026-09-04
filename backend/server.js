@@ -7,6 +7,23 @@ const rateLimit = require("express-rate-limit");
 const { Client, LocalAuth } = require("whatsapp-web.js");
 const qrcode = require("qrcode");
 const fs = require("fs");
+
+function getChromePath() {
+  try {
+    const puppeteer = require("puppeteer");
+    const chromePath = puppeteer.executablePath();
+
+    if (chromePath && fs.existsSync(chromePath)) {
+      console.log("✅ Chrome found:", chromePath);
+      return chromePath;
+    }
+  } catch (error) {
+    console.error("Chrome detection error:", error.message);
+  }
+
+  console.error("❌ Chrome executable not found");
+  return undefined;
+}
 const path = require("path");
 
 const app = express();
@@ -225,26 +242,26 @@ async function createDevice(deviceId) {
 
   log(`Creating WhatsApp device: ${deviceId}`);
 
-const client = new Client({
-  authStrategy: new LocalAuth({
-    clientId: deviceId,
-    dataPath: "./.wwebjs_auth"
-  }),
+  const client = new Client({
+    authStrategy: new LocalAuth({
+      clientId: deviceId,
+      dataPath: "./.wwebjs_auth"
+    }),
 
-  puppeteer: {
-    headless: true,
-
-    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
-      "--disable-gpu",
-      "--no-first-run",
-      "--no-zygote"
-    ]
-  }
-});
+    puppeteer: {
+      headless: true,
+      executablePath: getChromePath(),
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+        "--no-first-run",
+        "--no-zygote",
+        "--disable-software-rasterizer"
+      ]
+    }
+  });
 
   clients.set(deviceId, client);
 
