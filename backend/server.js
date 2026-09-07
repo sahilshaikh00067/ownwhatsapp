@@ -1,50 +1,112 @@
+/**
+ * WhatsApp QR Device Backend
+ * Node.js + Express + whatsapp-web.js
+ */
+
 "use strict";
 
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
-const multer = require("multer");
-const path = require("path");
-const fs = require("fs");
+
+const { Client, LocalAuth } = require("whatsapp-web.js");
+
 const puppeteer = require("puppeteer");
 const qrcode = require("qrcode");
 
-const {
-  Client,
-  LocalAuth,
-  MessageMedia
-} = require("whatsapp-web.js");
+const fs = require("fs");
+const path = require("path");
+
+
+/* =========================================================
+   APP
+========================================================= */
 
 const app = express();
 
-// ============================================================
-// CONFIG
-// ============================================================
-
 const PORT = Number(process.env.PORT || 5000);
-const NODE_ID = process.env.NODE_ID || "node1";
-const MAX_DEVICES = Number(process.env.MAX_DEVICES || 20);
-const API_KEY = process.env.API_KEY || "";
 
-const AUTH_PATH = path.join(
-  __dirname,
-  ".wwebjs_auth"
-);
+const NODE_ID =
+  process.env.NODE_ID || "node1";
 
-process.env.PUPPETEER_CACHE_DIR =
-  process.env.PUPPETEER_CACHE_DIR ||
-  "/opt/render/.cache/puppeteer";
+const MAX_DEVICES =
+  Number(process.env.MAX_DEVICES || 20);
 
-fs.mkdirSync(AUTH_PATH, {
-  recursive: true
-});
+const API_KEY =
+  process.env.API_KEY || "";
 
-// ============================================================
-// EXPRESS CONFIG
-// ============================================================
+
+/* =========================================================
+   PUPPETEER / CHROME
+========================================================= */
+
+let CHROME_PATH = "";
+
+try {
+
+  CHROME_PATH = puppeteer.executablePath();
+
+  console.log("========================================");
+  console.log("PUPPETEER VERSION:");
+  console.log(require("puppeteer/package.json").version);
+
+  console.log("CHROME EXECUTABLE:");
+  console.log(CHROME_PATH);
+
+  console.log("CHROME EXISTS:");
+  console.log(fs.existsSync(CHROME_PATH));
+
+  console.log("========================================");
+
+} catch (error) {
+
+  console.error(
+    "PUPPETEER CHROME PATH ERROR:",
+    error.message
+  );
+
+}
+
+
+/* =========================================================
+   DIRECTORIES
+========================================================= */
+
+const SESSIONS_DIR =
+  path.join(__dirname, "sessions");
+
+
+const AUTH_DIR =
+  path.join(
+    SESSIONS_DIR,
+    ".wwebjs_auth"
+  );
+
+
+try {
+
+  fs.mkdirSync(
+    SESSIONS_DIR,
+    { recursive: true }
+  );
+
+} catch (error) {
+
+  console.error(
+    "SESSION DIRECTORY ERROR:",
+    error.message
+  );
+
+}
+
+
+/* =========================================================
+   EXPRESS CONFIG
+========================================================= */
 
 app.set("trust proxy", 1);
+
 
 app.use(
   helmet({
@@ -52,2178 +114,2988 @@ app.use(
   })
 );
 
-// ============================================================
-// CORS
-// ============================================================
 
-const allowedOrigins = [
-  "https://ownwhatsapp.vercel.app",
-  "http://localhost:3000",
-  "http://127.0.0.1:3000"
-];
+app.use(
 
-app.use(cors({
-  origin: function (origin, callback) {
-    if (!origin || allowedOrigins.includes(origin)) {
-      return callback(null, true);
-    }
+  cors({
 
-    return callback(new Error(`CORS blocked for origin: ${origin} `));
+    origin: true,
 
-  },
+    methods: [
+      "GET",
+      "POST",
+      "OPTIONS"
+    ]
 
-  methods: [
-    "GET",
-    "POST",
-    "PUT",
-    "DELETE",
-    "OPTIONS"
-  ],
+  })
 
-  allowedHeaders: [
-    "Content-Type",
-    "Authorization",
-    "x-api-key",
-    "Cache-Control",
-    "Pragma"
-  ],
-
-  exposedHeaders: [
-    "Content-Type"
-  ],
-
-  credentials: false,
-
-  optionsSuccessStatus: 204
-}));
+);
 
 
 app.use(
+
   express.json({
+
     limit: "10mb"
+
   })
+
 );
+
 
 app.use(
+
   express.urlencoded({
+
     extended: true,
+
     limit: "10mb"
+
   })
+
 );
 
-// ============================================================
-// OPTIONAL API KEY
-// ============================================================
+
+/* =========================================================
+   API KEY
+========================================================= */
 
 if (API_KEY) {
-  app.use((req, res, next) => {
-    if (req.path === "/health") {
-      return next();
+
+  app.use(
+
+    (req, res, next) => {
+
+      if (req.path === "/health") {
+
+        return next();
+
+      }
+
+
+      if (
+        req.get("x-api-key") !== API_KEY
+      ) {
+
+        return res
+          .status(401)
+          .json({
+
+            status: "unauthorized"
+
+          });
+
+      }
+
+
+      next();
+
     }
 
-    if (
-      req.get("x-api-key") !== API_KEY
-    ) {
-      return res.status(401).json({
-        status: "unauthorized"
-      });
-    }
+  );
 
-    next();
-  });
 }
 
-// ============================================================
-// RATE LIMIT
-// ============================================================
+
+/* =========================================================
+   RATE LIMIT
+========================================================= */
 
 const limiter = rateLimit({
+
   windowMs: 60 * 1000,
-  max: 120,
+
+  max: 300,
+
   standardHeaders: true,
+
   legacyHeaders: false
+
 });
+
 
 app.use(limiter);
 
-// ============================================================
-// MULTER
-// ============================================================
 
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: {
-    fileSize: 50 * 1024 * 1024
-  }
-});
+/* =========================================================
+   DEVICE STORAGE
+========================================================= */
 
-// ============================================================
-// DEVICE STORAGE
-// ============================================================
+const clients = new Map();
+
+const devices = new Map();
+
+
+/*
+
+devices:
+
+{
+    status:
+        creating
+        qr
+        authenticated
+        ready
+        disconnected
+        error
+
+    qr: ""
+
+    number: ""
+
+    name: ""
+
+    error: ""
+
+    createdAt: ""
+
+    updatedAt: ""
+}
+
+*/
+
+
+/* =========================================================
+   CONSTANTS
+========================================================= */
 
 const DEVICE_RE =
   /^[a-zA-Z0-9_-]{1,64}$/;
 
-const clients = new Map();
-const devices = new Map();
 
-// ============================================================
-// HELPERS
-// ============================================================
+/* =========================================================
+   HELPERS
+========================================================= */
 
 function now() {
+
   return new Date().toISOString();
+
 }
+
 
 function log(...args) {
+
   console.log(
-    `[${now()}]`,
+
+    `[${new Date().toISOString()}]`,
+
     ...args
+
   );
+
 }
+
 
 function validDeviceId(deviceId) {
+
   return (
-    typeof deviceId === "string" &&
+
+    typeof deviceId === "string"
+
+    &&
+
     DEVICE_RE.test(deviceId)
+
   );
+
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
 
-function getChromePath() {
-  try {
-    const chromePath =
-      puppeteer.executablePath();
+function getDeviceState(deviceId) {
 
-    log(
-      "Puppeteer Chrome Path:",
-      chromePath
-    );
-
-    if (
-      chromePath &&
-      fs.existsSync(chromePath)
-    ) {
-      log("Chrome found successfully");
-      return chromePath;
-    }
-
-    log(
-      "Chrome executable path not found"
-    );
-
-    return undefined;
-
-  } catch (error) {
-    log(
-      "Chrome detection error:",
-      error.message
-    );
-
-    return undefined;
-  }
-}
-
-function getDevice(deviceId) {
   return devices.get(deviceId);
+
 }
 
-function updateDevice(
+
+function setDeviceState(
+
   deviceId,
+
   patch
+
 ) {
-  const previous =
-    devices.get(deviceId) || {
+
+  const oldState =
+
+    devices.get(deviceId)
+
+    ||
+
+    {
+
       status: "creating",
+
       qr: "",
+
       number: "",
+
       name: "",
+
       error: "",
+
       createdAt: now()
+
     };
 
-  const updated = {
-    ...previous,
+
+  const newState = {
+
+    ...oldState,
+
     ...patch,
+
     updatedAt: now()
+
   };
 
+
   devices.set(
+
     deviceId,
-    updated
+
+    newState
+
   );
 
-  return updated;
+
+  return newState;
+
 }
+
+
+/* =========================================================
+   SAFE DESTROY
+========================================================= */
 
 async function safeDestroy(client) {
+
   if (!client) {
+
     return;
+
   }
 
+
   try {
+
     await client.destroy();
-  } catch (error) {
+
+  }
+
+  catch (error) {
+
     log(
-      "Client destroy error:",
+
+      "CLIENT DESTROY ERROR:",
+
       error.message
+
     );
+
   }
+
 }
 
-function normalizeNumber(number) {
-  const digits =
-    String(number || "")
-      .replace(/\D/g, "");
 
-  if (
-    digits.length < 8 ||
-    digits.length > 15
-  ) {
-    return null;
-  }
-
-  return `${digits}@c.us`;
-}
-
-async function getWhatsAppState(
-  deviceId
-) {
-  const client =
-    clients.get(deviceId);
-
-  if (!client) {
-    return null;
-  }
-
-  try {
-    return await client.getState();
-  } catch (error) {
-    return null;
-  }
-}
-
-// ============================================================
-// REMOVE DEVICE
-// ============================================================
+/* =========================================================
+   REMOVE DEVICE
+========================================================= */
 
 async function removeDevice(
+
   deviceId,
+
   deleteSession = true
+
 ) {
+
   const client =
+
     clients.get(deviceId);
+
 
   clients.delete(deviceId);
 
+
   await safeDestroy(client);
+
 
   devices.delete(deviceId);
 
-  if (deleteSession) {
-    const sessionPath =
-      path.join(
-        AUTH_PATH,
-        `session-${deviceId}`
-      );
 
-    try {
-      fs.rmSync(
-        sessionPath,
-        {
-          recursive: true,
-          force: true
-        }
-      );
-
-      log(
-        `Session deleted: ${deviceId}`
-      );
-
-    } catch (error) {
-      log(
-        `Session delete error ${deviceId}:`,
-        error.message
-      );
-    }
-  }
-}
-
-// ============================================================
-// CREATE WHATSAPP DEVICE
-// ============================================================
-
-async function createDevice(deviceId) {
-
-  if (!validDeviceId(deviceId)) {
-    throw new Error(
-      "INVALID_DEVICE_ID"
-    );
-  }
-
-  if (clients.has(deviceId)) {
-    log(
-      `Device already exists: ${deviceId}`
-    );
+  if (!deleteSession) {
 
     return;
+
   }
 
-  if (
-    clients.size >= MAX_DEVICES
-  ) {
-    throw new Error(
-      `MAX_DEVICES_REACHED (${MAX_DEVICES})`
+
+  const sessionPath =
+
+    path.join(
+
+      AUTH_DIR,
+
+      `session-${deviceId}`
+
     );
-  }
 
-  updateDevice(deviceId, {
-    status: "creating",
-    qr: "",
-    error: "",
-    number: "",
-    name: ""
-  });
-
-  const chromePath =
-    getChromePath();
-
-  if (!chromePath) {
-    const errorMessage =
-      "Chrome executable not found. Puppeteer Chrome installation failed.";
-
-    updateDevice(deviceId, {
-      status: "error",
-      qr: "",
-      error: errorMessage
-    });
-
-    throw new Error(
-      errorMessage
-    );
-  }
-
-  log(
-    `Creating WhatsApp device: ${deviceId}`
-  );
-
-  const client =
-    new Client({
-
-      authStrategy:
-        new LocalAuth({
-          clientId: deviceId,
-          dataPath: AUTH_PATH
-        }),
-
-      puppeteer: {
-
-        headless: true,
-
-        executablePath:
-          chromePath,
-
-        args: [
-          "--no-sandbox",
-          "--disable-setuid-sandbox",
-          "--disable-dev-shm-usage",
-          "--disable-gpu",
-          "--disable-software-rasterizer",
-          "--disable-extensions",
-          "--disable-background-networking",
-          "--disable-sync",
-          "--no-first-run",
-          "--no-zygote"
-        ]
-      }
-    });
-
-  clients.set(
-    deviceId,
-    client
-  );
-
-  // ==========================================================
-  // QR EVENT
-  // ==========================================================
-
-  client.on(
-    "qr",
-    async (qrText) => {
-
-      try {
-
-        log(
-          `QR RECEIVED: ${deviceId}`
-        );
-
-        const qrDataUrl =
-          await qrcode.toDataURL(
-            qrText,
-            {
-              errorCorrectionLevel:
-                "M",
-
-              margin: 2,
-
-              width: 350
-            }
-          );
-
-        updateDevice(
-          deviceId,
-          {
-            status: "qr",
-            qr: qrDataUrl,
-            error: ""
-          }
-        );
-
-        log(
-          `QR GENERATED SUCCESSFULLY: ${deviceId}`
-        );
-
-      } catch (error) {
-
-        log(
-          `QR GENERATION ERROR ${deviceId}:`,
-          error.message
-        );
-
-        updateDevice(
-          deviceId,
-          {
-            status: "error",
-            qr: "",
-            error:
-              `QR_GENERATION_ERROR: ${error.message}`
-          }
-        );
-      }
-    }
-  );
-
-  // ==========================================================
-  // LOADING SCREEN
-  // ==========================================================
-
-  client.on(
-    "loading_screen",
-    (
-      percent,
-      message
-    ) => {
-
-      log(
-        `LOADING ${deviceId}:`,
-        percent,
-        message
-      );
-    }
-  );
-
-  // ==========================================================
-  // AUTHENTICATED
-  // ==========================================================
-
-  client.on(
-    "authenticated",
-    () => {
-
-      log(
-        `AUTHENTICATED: ${deviceId}`
-      );
-
-      updateDevice(
-        deviceId,
-        {
-          status:
-            "authenticated",
-          qr: "",
-          error: ""
-        }
-      );
-    }
-  );
-
-  // ==========================================================
-  // READY
-  // ==========================================================
-
-  client.on(
-    "ready",
-    () => {
-
-      const info =
-        client.info;
-
-      updateDevice(
-        deviceId,
-        {
-          status: "ready",
-          qr: "",
-          error: "",
-
-          number:
-            info?.wid?.user || "",
-
-          name:
-            info?.pushname || ""
-        }
-      );
-
-      log(
-        `DEVICE READY: ${deviceId}`,
-        info?.wid?.user ||
-        "unknown"
-      );
-    }
-  );
-
-  // ==========================================================
-  // AUTH FAILURE
-  // ==========================================================
-
-  client.on(
-    "auth_failure",
-    (message) => {
-
-      log(
-        `AUTH FAILURE ${deviceId}:`,
-        message
-      );
-
-      updateDevice(
-        deviceId,
-        {
-          status: "error",
-          qr: "",
-
-          error:
-            `AUTH_FAILURE: ${message ||
-            "Unknown error"
-            }`
-        }
-      );
-    }
-  );
-
-  // ==========================================================
-  // DISCONNECTED
-  // ==========================================================
-
-  client.on(
-    "disconnected",
-    (reason) => {
-
-      log(
-        `DEVICE DISCONNECTED ${deviceId}:`,
-        reason
-      );
-
-      clients.delete(
-        deviceId
-      );
-
-      updateDevice(
-        deviceId,
-        {
-          status:
-            "disconnected",
-
-          qr: "",
-
-          error:
-            String(
-              reason ||
-              "Disconnected"
-            )
-        }
-      );
-    }
-  );
-
-  // ==========================================================
-  // INITIALIZE
-  // ==========================================================
 
   try {
 
-    log(
-      `INITIALIZING WHATSAPP: ${deviceId}`
-    );
+    fs.rmSync(
 
-    await client.initialize();
+      sessionPath,
 
-    log(
-      `INITIALIZE FINISHED: ${deviceId}`
-    );
-
-  } catch (error) {
-
-    log(
-      `INITIALIZE ERROR ${deviceId}:`,
-      error.stack ||
-      error.message
-    );
-
-    clients.delete(
-      deviceId
-    );
-
-    updateDevice(
-      deviceId,
       {
-        status: "error",
-        qr: "",
 
-        error:
-          `INITIALIZE_ERROR: ${error.message}`
+        recursive: true,
+
+        force: true
+
       }
+
     );
 
-    throw error;
+
+    log(
+
+      "SESSION DELETED:",
+
+      deviceId
+
+    );
+
   }
+
+  catch (error) {
+
+    log(
+
+      "SESSION DELETE ERROR:",
+
+      error.message
+
+    );
+
+  }
+
 }
 
-// ============================================================
-// HEALTH
-// ============================================================
 
-app.get(
-  "/health",
-  async (req, res) => {
+/* =========================================================
+   CREATE WHATSAPP DEVICE
+========================================================= */
 
-    const deviceList = [];
+async function createDevice(deviceId) {
 
-    for (
-      const [
-        deviceId,
-        data
-      ]
-      of devices.entries()
-    ) {
 
-      let waState = null;
+  /* =========================
+     VALIDATE
+  ========================= */
 
-      if (
-        data.status === "ready"
-      ) {
-        waState =
-          await getWhatsAppState(
-            deviceId
-          );
-      }
+  if (!validDeviceId(deviceId)) {
 
-      deviceList.push({
-        deviceId,
-
-        status:
-          data.status,
-
-        number:
-          data.number || "",
-
-        name:
-          data.name || "",
-
-        waState,
-
-        error:
-          data.error || ""
-      });
-    }
-
-    return res.json({
-      status: "ok",
-
-      node: NODE_ID,
-
-      uptime:
-        Math.floor(
-          process.uptime()
-        ),
-
-      totalDevices:
-        clients.size,
-
-      maxDevices:
-        MAX_DEVICES,
-
-      chromePath:
-        getChromePath() || "",
-
-      devices:
-        deviceList
-    });
-  }
-);
-
-// ============================================================
-// CREATE DEVICE
-// ============================================================
-
-app.get(
-  "/create-device",
-  async (req, res) => {
-
-    res.set({
-      "Cache-Control":
-        "no-store, no-cache, must-revalidate, max-age=0",
-
-      "Pragma":
-        "no-cache",
-
-      "Expires":
-        "0"
-    });
-
-    const deviceId =
-      String(
-        req.query.deviceId || ""
-      );
-
-    if (
-      !validDeviceId(deviceId)
-    ) {
-      return res.status(400).json({
-        status: "failed",
-
-        message:
-          "Invalid deviceId. Use only letters, numbers, _ or -"
-      });
-    }
-
-    if (
-      clients.has(deviceId)
-    ) {
-
-      const data =
-        getDevice(deviceId);
-
-      return res.json({
-        status:
-          "already_exists",
-
-        deviceId,
-
-        deviceStatus:
-          data?.status ||
-          "unknown",
-
-        ready:
-          data?.status ===
-          "ready",
-
-        qrAvailable:
-          Boolean(
-            data?.qr
-          ),
-
-        error:
-          data?.error || ""
-      });
-    }
-
-    if (
-      clients.size >= MAX_DEVICES
-    ) {
-      return res.status(400).json({
-        status: "failed",
-
-        message:
-          `Maximum ${MAX_DEVICES} devices reached`
-      });
-    }
-
-    updateDevice(
-      deviceId,
-      {
-        status:
-          "creating",
-
-        qr: "",
-        error: "",
-        number: "",
-        name: ""
-      }
+    throw new Error(
+      "INVALID_DEVICE_ID"
     );
 
-    createDevice(deviceId)
-      .catch((error) => {
+  }
+
+
+  /* =========================
+     ALREADY EXISTS
+  ========================= */
+
+  if (clients.has(deviceId)) {
+
+    return clients.get(deviceId);
+
+  }
+
+
+  /* =========================
+     MAX DEVICES
+  ========================= */
+
+  if (
+
+    clients.size >= MAX_DEVICES
+
+  ) {
+
+    throw new Error(
+      "MAX_DEVICES_REACHED"
+    );
+
+  }
+
+
+  /* =========================
+     CHROME CHECK
+  ========================= */
+
+  if (!CHROME_PATH) {
+
+    throw new Error(
+      "CHROME_EXECUTABLE_NOT_FOUND"
+    );
+
+  }
+
+
+  if (
+
+    !fs.existsSync(CHROME_PATH)
+
+  ) {
+
+    throw new Error(
+
+      "CHROME_EXECUTABLE_DOES_NOT_EXIST: "
+
+      +
+
+      CHROME_PATH
+
+    );
+
+  }
+
+
+  /* =========================
+     STATE
+  ========================= */
+
+  setDeviceState(
+
+    deviceId,
+
+    {
+
+      status: "creating",
+
+      qr: "",
+
+      error: "",
+
+      number: "",
+
+      name: ""
+
+    }
+
+  );
+
+
+  log(
+
+    "========================================"
+
+  );
+
+
+  log(
+
+    "CREATING WHATSAPP DEVICE:",
+
+    deviceId
+
+  );
+
+
+  log(
+
+    "CHROME PATH:",
+
+    CHROME_PATH
+
+  );
+
+
+  log(
+
+    "========================================"
+
+  );
+
+
+  /* =========================
+     CREATE CLIENT
+  ========================= */
+
+  const client =
+
+    new Client({
+
+      authStrategy:
+
+        new LocalAuth({
+
+          clientId: deviceId,
+
+          dataPath: SESSIONS_DIR
+
+        }),
+
+
+      puppeteer: {
+
+
+        /* IMPORTANT */
+
+        executablePath:
+
+          CHROME_PATH,
+
+
+        headless: true,
+
+
+        args: [
+
+
+          "--no-sandbox",
+
+
+          "--disable-setuid-sandbox",
+
+
+          "--disable-dev-shm-usage",
+
+
+          "--disable-gpu",
+
+
+          "--disable-software-rasterizer",
+
+
+          "--disable-extensions",
+
+
+          "--disable-background-networking",
+
+
+          "--disable-background-timer-throttling",
+
+
+          "--disable-renderer-backgrounding",
+
+
+          "--disable-breakpad",
+
+
+          "--disable-component-update",
+
+
+          "--disable-default-apps",
+
+
+          "--disable-features=TranslateUI",
+
+
+          "--disable-ipc-flooding-protection",
+
+
+          "--no-first-run",
+
+
+          "--no-zygote"
+
+
+        ],
+
+
+        timeout: 120000,
+
+
+        protocolTimeout: 120000
+
+      },
+
+
+      restartOnAuthFail: true,
+
+
+      takeoverOnConflict: true,
+
+
+      takeoverTimeoutMs: 0
+
+    });
+
+
+  /* =========================
+     SAVE CLIENT
+  ========================= */
+
+  clients.set(
+
+    deviceId,
+
+    client
+
+  );
+
+
+  /* =====================================================
+     QR EVENT
+  ===================================================== */
+
+  client.on(
+
+    "qr",
+
+    async (qr) => {
+
+
+      try {
+
 
         log(
-          `BACKGROUND CREATE ERROR ${deviceId}:`,
-          error.stack ||
-          error.message
+
+          "QR RECEIVED:",
+
+          deviceId
+
         );
 
-        updateDevice(
+
+        const qrDataUrl =
+
+          await qrcode.toDataURL(
+
+            qr,
+
+            {
+
+              errorCorrectionLevel: "M",
+
+              margin: 2,
+
+              scale: 8
+
+            }
+
+          );
+
+
+        setDeviceState(
+
           deviceId,
+
           {
-            status:
-              "error",
+
+            status: "qr",
+
+            qr: qrDataUrl,
+
+            error: ""
+
+          }
+
+        );
+
+
+        log(
+
+          "QR GENERATED SUCCESSFULLY:",
+
+          deviceId
+
+        );
+
+
+      }
+
+      catch (error) {
+
+
+        console.error(
+
+          "QR GENERATION ERROR:",
+
+          deviceId,
+
+          error
+
+        );
+
+
+        setDeviceState(
+
+          deviceId,
+
+          {
+
+            status: "error",
 
             qr: "",
 
             error:
-              error.message ||
-              "Failed to initialize WhatsApp"
+
+              "QR_GENERATION_ERROR: "
+
+              +
+
+              error.message
+
           }
+
         );
-      });
 
-    return res.json({
-      status:
-        "creating",
 
-      deviceId,
+      }
 
-      node:
-        NODE_ID
-    });
-  }
-);
 
-// ============================================================
-// GET QR
-// ============================================================
+    }
 
-app.get(
-  "/get-qr",
-  (req, res) => {
+  );
 
-    res.set({
-      "Cache-Control":
-        "no-store, no-cache, must-revalidate, max-age=0",
 
-      "Pragma":
-        "no-cache",
+  /* =====================================================
+     AUTHENTICATED
+  ===================================================== */
 
-      "Expires":
-        "0"
-    });
+  client.on(
 
-    const deviceId =
-      String(
-        req.query.deviceId || ""
+    "authenticated",
+
+    () => {
+
+
+      log(
+
+        "AUTHENTICATED:",
+
+        deviceId
+
       );
 
-    if (
-      !validDeviceId(deviceId)
-    ) {
-      return res.status(400).json({
-        status:
-          "failed",
+
+      setDeviceState(
 
         deviceId,
 
+        {
+
+          status: "authenticated",
+
+          qr: "",
+
+          error: ""
+
+        }
+
+      );
+
+
+    }
+
+  );
+
+
+  /* =====================================================
+     READY
+  ===================================================== */
+
+  client.on(
+
+    "ready",
+
+    () => {
+
+
+      const info =
+
+        client.info;
+
+
+      const number =
+
+        info?.wid?.user
+
+        ||
+
+        "";
+
+
+      const name =
+
+        info?.pushname
+
+        ||
+
+        "";
+
+
+      setDeviceState(
+
+        deviceId,
+
+        {
+
+          status: "ready",
+
+          qr: "",
+
+          error: "",
+
+          number,
+
+          name
+
+        }
+
+      );
+
+
+      log(
+
+        "========================================"
+
+      );
+
+
+      log(
+
+        "WHATSAPP READY:",
+
+        deviceId
+
+      );
+
+
+      log(
+
+        "NUMBER:",
+
+        number
+
+      );
+
+
+      log(
+
+        "NAME:",
+
+        name
+
+      );
+
+
+      log(
+
+        "========================================"
+
+      );
+
+
+    }
+
+  );
+
+
+  /* =====================================================
+     AUTH FAILURE
+  ===================================================== */
+
+  client.on(
+
+    "auth_failure",
+
+    (message) => {
+
+
+      console.error(
+
+        "AUTH FAILURE:",
+
+        deviceId,
+
+        message
+
+      );
+
+
+      setDeviceState(
+
+        deviceId,
+
+        {
+
+          status: "error",
+
+          qr: "",
+
+          error:
+
+            "AUTH_FAILURE: "
+
+            +
+
+            (
+
+              message
+
+              ||
+
+              "Unknown authentication failure"
+
+            )
+
+        }
+
+      );
+
+
+    }
+
+  );
+
+
+  /* =====================================================
+     DISCONNECTED
+  ===================================================== */
+
+  client.on(
+
+    "disconnected",
+
+    async (reason) => {
+
+
+      log(
+
+        "DEVICE DISCONNECTED:",
+
+        deviceId,
+
+        reason
+
+      );
+
+
+      clients.delete(deviceId);
+
+
+      setDeviceState(
+
+        deviceId,
+
+        {
+
+          status: "disconnected",
+
+          qr: "",
+
+          error:
+
+            String(
+
+              reason
+
+              ||
+
+              "Disconnected"
+
+            )
+
+        }
+
+      );
+
+
+    }
+
+  );
+
+
+  /* =====================================================
+     INITIALIZE
+  ===================================================== */
+
+  try {
+
+
+    log(
+
+      "INITIALIZING WHATSAPP:",
+
+      deviceId
+
+    );
+
+
+    await client.initialize();
+
+
+  }
+
+  catch (error) {
+
+
+    clients.delete(deviceId);
+
+
+    console.error(
+
+      "INITIALIZE ERROR:",
+
+      deviceId,
+
+      error
+
+    );
+
+
+    setDeviceState(
+
+      deviceId,
+
+      {
+
+        status: "error",
+
         qr: "",
-
-        ready:
-          false,
-
-        exists:
-          false,
 
         error:
-          "Invalid deviceId"
-      });
-    }
 
-    const data =
-      getDevice(deviceId);
+          "INITIALIZE_ERROR: "
 
-    const client =
-      clients.get(deviceId);
+          +
 
-    if (!data) {
-      return res.json({
-        status:
-          "not_found",
+          error.message
 
-        deviceId,
+      }
 
-        qr: "",
+    );
 
-        ready:
-          false,
 
-        exists:
-          false,
+    throw error;
 
-        error: ""
-      });
-    }
-
-    return res.json({
-      status:
-        data.status ||
-        "creating",
-
-      deviceId,
-
-      qr:
-        data.qr || "",
-
-      ready:
-        data.status ===
-        "ready",
-
-      exists:
-        Boolean(client),
-
-      error:
-        data.error || "",
-
-      number:
-        data.number || "",
-
-      name:
-        data.name || "",
-
-      updatedAt:
-        data.updatedAt ||
-        now()
-    });
   }
-);
 
-// ============================================================
-// GET DEVICE
-// ============================================================
+
+  return client;
+
+}
+
+
+/* =========================================================
+   GET WHATSAPP STATE
+========================================================= */
+
+async function getWhatsAppState(deviceId) {
+
+
+  const client =
+
+    clients.get(deviceId);
+
+
+  if (!client) {
+
+    return null;
+
+  }
+
+
+  try {
+
+
+    return await client.getState();
+
+
+  }
+
+  catch (error) {
+
+
+    return null;
+
+
+  }
+
+}
+
+
+/* =========================================================
+   NORMALIZE NUMBER
+========================================================= */
+
+function normalizeNumber(number) {
+
+
+  const digits =
+
+    String(
+
+      number
+
+      ||
+
+      ""
+
+    )
+
+      .replace(
+
+        /\D/g,
+
+        ""
+
+      );
+
+
+  if (
+
+    digits.length < 8
+
+    ||
+
+    digits.length > 15
+
+  ) {
+
+    return null;
+
+  }
+
+
+  return (
+
+    `${digits}@c.us`
+
+  );
+
+}
+
+
+/* =========================================================
+   HEALTH
+========================================================= */
 
 app.get(
-  "/get-device",
-  async (req, res) => {
 
-    res.set({
-      "Cache-Control":
-        "no-store, no-cache, must-revalidate, max-age=0"
-    });
+  "/health",
 
-    const deviceId =
-      String(
-        req.query.deviceId || ""
-      );
+  async (
 
-    if (
-      !validDeviceId(deviceId)
-    ) {
-      return res.status(400).json({
-        status:
-          "failed",
+    req,
 
-        message:
-          "Invalid deviceId"
-      });
-    }
+    res
 
-    const data =
-      getDevice(deviceId);
+  ) => {
 
-    if (!data) {
-      return res.json({
-        deviceId,
-
-        status:
-          "not_found",
-
-        ready:
-          false,
-
-        error: ""
-      });
-    }
-
-    const waState =
-      await getWhatsAppState(
-        deviceId
-      );
-
-    return res.json({
-      deviceId,
-
-      status:
-        data.status,
-
-      ready:
-        data.status ===
-        "ready",
-
-      number:
-        data.number || "",
-
-      name:
-        data.name || "",
-
-      waState,
-
-      error:
-        data.error || "",
-
-      createdAt:
-        data.createdAt,
-
-      updatedAt:
-        data.updatedAt
-    });
-  }
-);
-
-// ============================================================
-// DEVICE STATE
-// ============================================================
-
-app.get(
-  "/device-state",
-  async (req, res) => {
-
-    const deviceId =
-      String(
-        req.query.deviceId || ""
-      );
-
-    if (
-      !validDeviceId(deviceId)
-    ) {
-      return res.status(400).json({
-        status:
-          "failed",
-
-        message:
-          "Invalid deviceId"
-      });
-    }
-
-    const data =
-      getDevice(deviceId);
-
-    if (!data) {
-      return res.status(404).json({
-        status:
-          "not_found"
-      });
-    }
-
-    const waState =
-      await getWhatsAppState(
-        deviceId
-      );
-
-    return res.json({
-      deviceId,
-
-      backendStatus:
-        data.status,
-
-      waState,
-
-      ready:
-        data.status ===
-        "ready",
-
-      hasQr:
-        Boolean(
-          data.qr
-        ),
-
-      error:
-        data.error || ""
-    });
-  }
-);
-
-// ============================================================
-// LIST DEVICES
-// ============================================================
-
-app.get(
-  "/list-devices",
-  (req, res) => {
 
     const list = [];
 
+
     for (
+
       const [
+
         deviceId,
+
         data
+
       ]
-      of devices.entries()
+
+      of
+
+      devices.entries()
+
     ) {
+
+
+      const waState =
+
+        data.status === "ready"
+
+          ?
+
+          await getWhatsAppState(
+
+            deviceId
+
+          )
+
+          :
+
+          null;
+
 
       list.push({
+
         deviceId,
 
+        status: data.status,
+
+        number: data.number,
+
+        name: data.name,
+
+        waState,
+
+        error: data.error
+
+      });
+
+
+    }
+
+
+    return res.json({
+
+
+      status: "ok",
+
+
+      node: NODE_ID,
+
+
+      uptime:
+
+        Math.floor(
+
+          process.uptime()
+
+        ),
+
+
+      chromePath:
+
+        CHROME_PATH,
+
+
+      chromeExists:
+
+        fs.existsSync(
+
+          CHROME_PATH
+
+        ),
+
+
+      devices: list,
+
+
+      totalDevices:
+
+        clients.size,
+
+
+      maxDevices:
+
+        MAX_DEVICES
+
+
+    });
+
+
+  }
+
+);
+
+
+/* =========================================================
+   CREATE DEVICE
+========================================================= */
+
+app.get(
+
+  "/create-device",
+
+  async (
+
+    req,
+
+    res
+
+  ) => {
+
+
+    const deviceId =
+
+      String(
+
+        req.query.deviceId
+
+        ||
+
+        ""
+
+      );
+
+
+    /* VALIDATE */
+
+    if (
+
+      !validDeviceId(deviceId)
+
+    ) {
+
+
+      return res
+
+        .status(400)
+
+        .json({
+
+
+          status: "failed",
+
+
+          message:
+
+            "Invalid deviceId"
+
+
+        });
+
+
+    }
+
+
+    /* EXISTS */
+
+    if (
+
+      clients.has(deviceId)
+
+    ) {
+
+
+      const data =
+
+        getDeviceState(
+
+          deviceId
+
+        );
+
+
+      return res.json({
+
+
         status:
-          data.status,
+
+          "already_exists",
+
+
+        deviceId,
+
+
+        qr:
+
+          data?.qr
+
+          ||
+
+          "",
+
 
         ready:
-          data.status ===
-          "ready",
 
-        number:
-          data.number || "",
+          data?.status === "ready",
 
-        name:
-          data.name || "",
+
+        exists: true,
+
 
         error:
-          data.error || ""
+
+          data?.error
+
+          ||
+
+          ""
+
+
       });
+
+
     }
 
-    return res.json({
-      devices:
-        list,
 
-      total:
-        list.length,
+    /* CREATE IN BACKGROUND */
 
-      node:
-        NODE_ID
-    });
-  }
-);
-
-// ============================================================
-// DELETE DEVICE
-// ============================================================
-
-app.get(
-  "/delete-device",
-  async (req, res) => {
-
-    const deviceId =
-      String(
-        req.query.deviceId || ""
-      );
-
-    if (
-      !validDeviceId(deviceId)
-    ) {
-      return res.status(400).json({
-        status:
-          "failed",
-
-        message:
-          "Invalid deviceId"
-      });
-    }
-
-    if (
-      !clients.has(deviceId) &&
-      !devices.has(deviceId)
-    ) {
-      return res.json({
-        status:
-          "not_found"
-      });
-    }
-
-    await removeDevice(
-      deviceId,
-      true
-    );
-
-    return res.json({
-      status:
-        "deleted",
+    createDevice(
 
       deviceId
-    });
-  }
-);
 
-// ============================================================
-// LOGOUT
-// ============================================================
+    )
 
-app.get(
-  "/logout",
-  async (req, res) => {
+      .catch(
 
-    const deviceId =
-      String(
-        req.query.deviceId || ""
+        (error) => {
+
+
+          console.error(
+
+            "BACKGROUND CREATE ERROR:",
+
+            deviceId,
+
+            error
+
+          );
+
+
+        }
+
       );
 
-    const client =
-      clients.get(deviceId);
 
-    if (!client) {
-      return res.json({
-        status:
-          "not_found"
-      });
+    return res.json({
+
+
+      status:
+
+        "creating",
+
+
+      deviceId,
+
+
+      qr: "",
+
+
+      ready: false,
+
+
+      exists: false,
+
+
+      node:
+
+        NODE_ID
+
+
+    });
+
+
+  }
+
+);
+
+
+/* =========================================================
+   GET QR
+========================================================= */
+
+app.get(
+
+  "/get-qr",
+
+  (
+
+    req,
+
+    res
+
+  ) => {
+
+
+    const deviceId =
+
+      String(
+
+        req.query.deviceId
+
+        ||
+
+        ""
+
+      );
+
+
+    if (
+
+      !validDeviceId(deviceId)
+
+    ) {
+
+
+      return res
+
+        .status(400)
+
+        .json({
+
+
+          status: "failed",
+
+
+          message:
+
+            "Invalid deviceId"
+
+
+        });
+
+
     }
 
+
+    const data =
+
+      getDeviceState(
+
+        deviceId
+
+      );
+
+
+    /* NOT FOUND */
+
+    if (!data) {
+
+
+      return res.json({
+
+
+        status:
+
+          "not_found",
+
+
+        deviceId,
+
+
+        qr: "",
+
+
+        ready: false,
+
+
+        exists: false,
+
+
+        error: ""
+
+
+      });
+
+
+    }
+
+
+    /* RETURN QR STATE */
+
+    return res.json({
+
+
+      status:
+
+        data.status,
+
+
+      deviceId,
+
+
+      qr:
+
+        data.qr
+
+        ||
+
+        "",
+
+
+      ready:
+
+        data.status === "ready",
+
+
+      exists:
+
+        clients.has(deviceId),
+
+
+      error:
+
+        data.error
+
+        ||
+
+        "",
+
+
+      number:
+
+        data.number
+
+        ||
+
+        "",
+
+
+      name:
+
+        data.name
+
+        ||
+
+        ""
+
+
+    });
+
+
+  }
+
+);
+
+
+/* =========================================================
+   GET DEVICE
+========================================================= */
+
+app.get(
+
+  "/get-device",
+
+  async (
+
+    req,
+
+    res
+
+  ) => {
+
+
+    const deviceId =
+
+      String(
+
+        req.query.deviceId
+
+        ||
+
+        ""
+
+      );
+
+
+    const data =
+
+      getDeviceState(
+
+        deviceId
+
+      );
+
+
+    if (!data) {
+
+
+      return res.json({
+
+
+        deviceId,
+
+
+        status:
+
+          "not_found",
+
+
+        ready: false,
+
+
+        exists: false
+
+
+      });
+
+
+    }
+
+
+    const waState =
+
+      await getWhatsAppState(
+
+        deviceId
+
+      );
+
+
+    return res.json({
+
+
+      deviceId,
+
+
+      status:
+
+        data.status,
+
+
+      ready:
+
+        data.status === "ready",
+
+
+      exists:
+
+        clients.has(deviceId),
+
+
+      number:
+
+        data.number
+
+        ||
+
+        "",
+
+
+      name:
+
+        data.name
+
+        ||
+
+        "",
+
+
+      waState,
+
+
+      error:
+
+        data.error
+
+        ||
+
+        "",
+
+
+      createdAt:
+
+        data.createdAt,
+
+
+      updatedAt:
+
+        data.updatedAt
+
+
+    });
+
+
+  }
+
+);
+
+
+/* =========================================================
+   DEVICE STATE
+========================================================= */
+
+app.get(
+
+  "/device-state",
+
+  async (
+
+    req,
+
+    res
+
+  ) => {
+
+
+    const deviceId =
+
+      String(
+
+        req.query.deviceId
+
+        ||
+
+        ""
+
+      );
+
+
+    const data =
+
+      getDeviceState(
+
+        deviceId
+
+      );
+
+
+    if (!data) {
+
+
+      return res
+
+        .status(404)
+
+        .json({
+
+
+          status:
+
+            "not_found"
+
+
+        });
+
+
+    }
+
+
+    const waState =
+
+      await getWhatsAppState(
+
+        deviceId
+
+      );
+
+
+    return res.json({
+
+
+      deviceId,
+
+
+      backendStatus:
+
+        data.status,
+
+
+      waState,
+
+
+      ready:
+
+        data.status === "ready",
+
+
+      hasQr:
+
+        Boolean(
+
+          data.qr
+
+        ),
+
+
+      error:
+
+        data.error
+
+        ||
+
+        ""
+
+
+    });
+
+
+  }
+
+);
+
+
+/* =========================================================
+   LIST DEVICES
+========================================================= */
+
+app.get(
+
+  "/list-devices",
+
+  (
+
+    req,
+
+    res
+
+  ) => {
+
+
+    const list = [];
+
+
+    for (
+
+      const [
+
+        deviceId,
+
+        data
+
+      ]
+
+      of
+
+      devices.entries()
+
+    ) {
+
+
+      list.push({
+
+
+        deviceId,
+
+
+        status:
+
+          data.status,
+
+
+        ready:
+
+          data.status === "ready",
+
+
+        number:
+
+          data.number
+
+          ||
+
+          "",
+
+
+        name:
+
+          data.name
+
+          ||
+
+          "",
+
+
+        error:
+
+          data.error
+
+          ||
+
+          ""
+
+
+      });
+
+
+    }
+
+
+    return res.json({
+
+
+      devices: list,
+
+
+      total:
+
+        list.length,
+
+
+      node:
+
+        NODE_ID
+
+
+    });
+
+
+  }
+
+);
+
+
+/* =========================================================
+   DELETE DEVICE
+========================================================= */
+
+app.get(
+
+  "/delete-device",
+
+  async (
+
+    req,
+
+    res
+
+  ) => {
+
+
+    const deviceId =
+
+      String(
+
+        req.query.deviceId
+
+        ||
+
+        ""
+
+      );
+
+
+    if (
+
+      !validDeviceId(deviceId)
+
+    ) {
+
+
+      return res
+
+        .status(400)
+
+        .json({
+
+
+          status:
+
+            "failed",
+
+
+          message:
+
+            "Invalid deviceId"
+
+
+        });
+
+
+    }
+
+
+    if (
+
+      !clients.has(deviceId)
+
+      &&
+
+      !devices.has(deviceId)
+
+    ) {
+
+
+      return res.json({
+
+
+        status:
+
+          "not_found"
+
+
+      });
+
+
+    }
+
+
+    await removeDevice(
+
+      deviceId,
+
+      true
+
+    );
+
+
+    return res.json({
+
+
+      status:
+
+        "deleted",
+
+
+      deviceId
+
+
+    });
+
+
+  }
+
+);
+
+
+/* =========================================================
+   LOGOUT
+========================================================= */
+
+app.get(
+
+  "/logout",
+
+  async (
+
+    req,
+
+    res
+
+  ) => {
+
+
+    const deviceId =
+
+      String(
+
+        req.query.deviceId
+
+        ||
+
+        ""
+
+      );
+
+
+    const client =
+
+      clients.get(deviceId);
+
+
+    if (!client) {
+
+
+      return res.json({
+
+
+        status:
+
+          "not_found"
+
+
+      });
+
+
+    }
+
+
     try {
+
 
       await client.logout();
 
-    } catch (error) {
+
+    }
+
+    catch (error) {
+
 
       log(
-        `Logout error ${deviceId}:`,
+
+        "LOGOUT ERROR:",
+
         error.message
+
       );
+
+
     }
+
 
     await removeDevice(
+
       deviceId,
+
       true
+
     );
 
+
     return res.json({
+
+
       status:
+
         "logged_out",
 
+
       deviceId
+
+
     });
+
+
   }
+
 );
 
-// ============================================================
-// SEND SINGLE MESSAGE
-// ============================================================
+
+/* =========================================================
+   SEND SINGLE MESSAGE
+========================================================= */
 
 app.post(
+
   "/send-single",
-  async (req, res) => {
+
+  async (
+
+    req,
+
+    res
+
+  ) => {
+
 
     const deviceId =
+
       String(
-        req.body.deviceId || ""
+
+        req.body.deviceId
+
+        ||
+
+        ""
+
       );
+
 
     const number =
+
       normalizeNumber(
+
         req.body.number
+
       );
+
 
     const message =
+
       String(
-        req.body.message || ""
-      ).trim();
+
+        req.body.message
+
+        ||
+
+        ""
+
+      )
+
+        .trim();
+
 
     if (
-      !validDeviceId(deviceId)
-    ) {
-      return res.status(400).json({
-        status:
-          "failed",
 
-        message:
-          "Valid deviceId required"
-      });
+      !validDeviceId(deviceId)
+
+    ) {
+
+
+      return res
+
+        .status(400)
+
+        .json({
+
+
+          status:
+
+            "failed",
+
+
+          message:
+
+            "Valid deviceId required"
+
+
+        });
+
+
     }
+
 
     if (!number) {
-      return res.status(400).json({
-        status:
-          "failed",
 
-        message:
-          "Valid number required"
-      });
+
+      return res
+
+        .status(400)
+
+        .json({
+
+
+          status:
+
+            "failed",
+
+
+          message:
+
+            "Valid number required"
+
+
+        });
+
+
     }
+
 
     if (!message) {
-      return res.status(400).json({
-        status:
-          "failed",
 
-        message:
-          "Message required"
-      });
+
+      return res
+
+        .status(400)
+
+        .json({
+
+
+          status:
+
+            "failed",
+
+
+          message:
+
+            "Message required"
+
+
+        });
+
+
     }
+
 
     if (
-      message.length > 4096
-    ) {
-      return res.status(400).json({
-        status:
-          "failed",
 
-        message:
-          "Message too long"
-      });
+      message.length > 4096
+
+    ) {
+
+
+      return res
+
+        .status(400)
+
+        .json({
+
+
+          status:
+
+            "failed",
+
+
+          message:
+
+            "Message too long"
+
+
+        });
+
+
     }
+
 
     const client =
+
       clients.get(deviceId);
 
+
     const data =
-      getDevice(deviceId);
+
+      getDeviceState(deviceId);
+
 
     if (
-      !client ||
-      !data ||
-      data.status !== "ready"
-    ) {
-      return res.status(409).json({
-        status:
-          "failed",
 
-        message:
-          "Device is not ready"
-      });
+
+      !client
+
+      ||
+
+      !data
+
+      ||
+
+      data.status !== "ready"
+
+    ) {
+
+
+      return res
+
+        .status(409)
+
+        .json({
+
+
+          status:
+
+            "failed",
+
+
+          message:
+
+            "Device not ready"
+
+
+        });
+
+
     }
 
+
     try {
+
 
       const waState =
+
         await getWhatsAppState(
+
           deviceId
+
         );
 
-      if (
-        waState &&
-        waState !==
-        "CONNECTED"
-      ) {
-        return res.status(409).json({
-          status:
-            "failed",
-
-          message:
-            `WhatsApp not connected: ${waState}`
-        });
-      }
-
-      const registered =
-        await client.isRegisteredUser(
-          number
-        );
-
-      if (!registered) {
-        return res.json({
-          status:
-            "nonwa",
-
-          message:
-            "Number is not registered on WhatsApp"
-        });
-      }
-
-      const result =
-        await client.sendMessage(
-          number,
-          message
-        );
-
-      return res.json({
-        status:
-          "sent",
-
-        messageId:
-          result?.id?._serialized ||
-          ""
-      });
-
-    } catch (error) {
-
-      log(
-        "SEND ERROR:",
-        error.stack ||
-        error.message
-      );
-
-      return res.status(500).json({
-        status:
-          "failed",
-
-        message:
-          error.message ||
-          "Send failed"
-      });
-    }
-  }
-);
-// ============================================================
-// SEND BULK
-// ============================================================
-
-app.post(
-  "/send-bulk",
-
-  upload.array(
-    "files",
-    20
-  ),
-
-  async (req, res) => {
-
-    try {
-
-      log(
-        "SEND BULK BODY:",
-        req.body
-      );
-
-      log(
-        "SEND BULK FILES:",
-        req.files?.length || 0
-      );
-
-      // ======================================================
-      // NUMBERS
-      // ======================================================
-
-      let numbers =
-        req.body.numbers;
-
-      if (!numbers) {
-        return res.status(400).json({
-          status:
-            "failed",
-
-          message:
-            "No numbers received"
-        });
-      }
-
-      // If JSON string was sent
-      if (
-        typeof numbers ===
-        "string" &&
-        numbers.startsWith("[")
-      ) {
-        try {
-          numbers =
-            JSON.parse(numbers);
-        } catch (error) {
-          // Keep as normal string
-        }
-      }
 
       if (
-        !Array.isArray(numbers)
+
+        waState
+
+        &&
+
+        waState !== "CONNECTED"
+
       ) {
-        numbers =
-          String(numbers)
-            .split(/[\n,\r]+/)
-            .map((n) =>
-              n.trim()
-            )
-            .filter(Boolean);
-      }
 
-      numbers =
-        numbers
-          .map((n) =>
-            String(n).trim()
-          )
-          .filter(Boolean);
 
-      // ======================================================
-      // MESSAGE
-      // ======================================================
+        return res
 
-      const message =
-        String(
-          req.body.message || ""
-        ).trim();
+          .status(409)
 
-      // ======================================================
-      // VISIT URL
-      // ======================================================
+          .json({
 
-      const visitUrl =
-        String(
-          req.body.visitUrl || ""
-        ).trim();
 
-      // ======================================================
-      // CALL NUMBER
-      // ======================================================
-
-      const callNumber =
-        String(
-          req.body.callNumber || ""
-        )
-          .replace(/\D/g, "")
-          .trim();
-
-      // ======================================================
-      // VALIDATE URL
-      // ======================================================
-
-      if (visitUrl) {
-
-        try {
-
-          const parsedUrl =
-            new URL(
-              visitUrl
-            );
-
-          if (
-            parsedUrl.protocol !==
-            "http:" &&
-            parsedUrl.protocol !==
-            "https:"
-          ) {
-            throw new Error(
-              "Invalid URL"
-            );
-          }
-
-        } catch (error) {
-
-          return res.status(400).json({
             status:
+
               "failed",
+
 
             message:
-              "Invalid Visit Now URL"
+
+              `WhatsApp not connected: ${waState}`
+
+
           });
-        }
+
+
       }
 
-      // ======================================================
-      // VALIDATE CALL NUMBER
-      // ======================================================
 
-      if (
-        callNumber &&
-        (
-          callNumber.length < 8 ||
-          callNumber.length > 15
-        )
-      ) {
-        return res.status(400).json({
-          status:
-            "failed",
+      const registered =
 
-          message:
-            "Invalid Call Now number"
-        });
-      }
+        await client.isRegisteredUser(
 
-      // ======================================================
-      // BUILD MESSAGE
-      // ======================================================
+          number
 
-      let finalMessage =
-        String(
-          message || ""
-        ).trim();
+        );
 
-      if (visitUrl) {
 
-        finalMessage +=
-          `${finalMessage ? "\n\n" : ""}` +
-          `🔗 *${visitUrl}*\n\n` +
-          `👉 _Tap the link above to visit now_`;
-      }
+      if (!registered) {
 
-      if (callNumber) {
 
-        finalMessage +=
-          `${finalMessage ? "\n\n" : ""}` +
-          `📱 *+${callNumber}*\n\n` +
-          `👉 _Tap the number above to connect with us_`;
-      }
-
-      // ======================================================
-      // FIND READY DEVICES
-      // ======================================================
-
-      const readyDevices = [];
-
-      for (
-        const [
-          deviceId,
-          device
-        ]
-        of devices.entries()
-      ) {
-
-        const client =
-          clients.get(
-            deviceId
-          );
-
-        if (
-          client &&
-          device &&
-          device.status ===
-          "ready"
-        ) {
-
-          readyDevices.push({
-            deviceId,
-            client
-          });
-        }
-      }
-
-      if (
-        readyDevices.length === 0
-      ) {
         return res.json({
+
+
           status:
-            "no_device",
 
-          message:
-            "No WhatsApp device connected"
-        });
-      }
-
-      if (
-        numbers.length === 0
-      ) {
-        return res.status(400).json({
-          status:
-            "failed",
-
-          message:
-            "No valid numbers received"
-        });
-      }
-
-      if (
-        !finalMessage &&
-        (
-          !req.files ||
-          req.files.length === 0
-        )
-      ) {
-        return res.status(400).json({
-          status:
-            "failed",
-
-          message:
-            "Message or media is required"
-        });
-      }
-
-      log(
-        `Sending campaign to ${numbers.length} numbers using ${readyDevices.length} device(s)`
-      );
-
-      const results = [];
-
-      let deviceIndex = 0;
-
-      // ======================================================
-      // SEND LOOP
-      // ======================================================
-
-      for (
-        const rawNumber
-        of numbers
-      ) {
-
-        let number =
-          String(rawNumber)
-            .replace(/\D/g, "");
-
-        // Indian 10-digit number
-        if (
-          number.length === 10
-        ) {
-          number =
-            `91${number}`;
-        }
-
-        if (
-          number.length < 8 ||
-          number.length > 15
-        ) {
-
-          results.push({
-            number:
-              rawNumber,
-
-            status:
-              "invalid",
-
-            error:
-              "Invalid phone number"
-          });
-
-          continue;
-        }
-
-        // Round-robin device
-        const selected =
-          readyDevices[
-          deviceIndex %
-          readyDevices.length
-          ];
-
-        deviceIndex++;
-
-        const client =
-          selected.client;
-
-        const deviceId =
-          selected.deviceId;
-
-        const chatId =
-          `${number}@c.us`;
-
-        try {
-
-          log(
-            `Checking ${number} using ${deviceId}`
-          );
-
-          const registered =
-            await client.isRegisteredUser(
-              chatId
-            );
-
-          if (!registered) {
-
-            results.push({
-              number,
-              deviceId,
-
-              status:
-                "nonwa"
-            });
-
-            continue;
-          }
-
-          // ==================================================
-          // MEDIA
-          // ==================================================
-
-          if (
-            req.files &&
-            req.files.length > 0
-          ) {
-
-            let mediaIndex = 0;
-
-            for (
-              const file
-              of req.files
-            ) {
-
-              const media =
-                new MessageMedia(
-                  file.mimetype,
-                  file.buffer.toString(
-                    "base64"
-                  ),
-                  file.originalname
-                );
-
-              const isImage =
-                file.mimetype.startsWith(
-                  "image/"
-                );
-
-              const isVideo =
-                file.mimetype.startsWith(
-                  "video/"
-                );
-
-              const options = {
-                sendMediaAsDocument:
-                  !isImage &&
-                  !isVideo
-              };
-
-              // First image/video gets caption
-              if (
-                mediaIndex === 0 &&
-                finalMessage &&
-                (
-                  isImage ||
-                  isVideo
-                )
-              ) {
-                options.caption =
-                  finalMessage;
-              }
-
-              await client.sendMessage(
-                chatId,
-                media,
-                options
-              );
-
-              mediaIndex++;
-
-              await sleep(500);
-            }
-
-          } else if (
-            finalMessage
-          ) {
-
-            // No media -> normal message
-
-            await client.sendMessage(
-              chatId,
-              finalMessage
-            );
-          }
-
-          results.push({
-            number,
-            deviceId,
-
-            status:
-              "sent"
-          });
-
-          log(
-            `SUCCESS: ${number}`
-          );
-
-        } catch (error) {
-
-          log(
-            `FAILED ${number}:`,
-            error.message
-          );
-
-          results.push({
-            number,
-            deviceId,
-
-            status:
-              "failed",
-
-            error:
-              error.message ||
-              "Message send failed"
-          });
-        }
-
-        // Gap between recipients
-        await sleep(1200);
-      }
-
-      // ======================================================
-      // SUMMARY
-      // ======================================================
-
-      const sent =
-        results.filter(
-          (item) =>
-            item.status ===
-            "sent"
-        ).length;
-
-      const failed =
-        results.filter(
-          (item) =>
-            item.status ===
-            "failed"
-        ).length;
-
-      const nonwa =
-        results.filter(
-          (item) =>
-            item.status ===
             "nonwa"
-        ).length;
 
-      const invalid =
-        results.filter(
-          (item) =>
-            item.status ===
-            "invalid"
-        ).length;
 
-      log({
-        total:
-          results.length,
+        });
 
-        sent,
-        failed,
-        nonwa,
-        invalid
-      });
+
+      }
+
+
+      const result =
+
+        await client.sendMessage(
+
+          number,
+
+          message
+
+        );
+
 
       return res.json({
+
+
         status:
-          "completed",
 
-        total:
-          results.length,
+          "sent",
 
-        sent,
-        failed,
-        nonwa,
-        invalid,
 
-        results
+        messageId:
+
+          result?.id?._serialized
+
+          ||
+
+          ""
+
+
       });
 
-    } catch (error) {
 
-      log(
-        "SEND BULK FATAL ERROR:",
-        error.stack ||
-        error.message
+    }
+
+    catch (error) {
+
+
+      console.error(
+
+        "SEND ERROR:",
+
+        error
+
       );
 
-      return res.status(500).json({
-        status:
-          "failed",
 
-        message:
-          error.message ||
-          "Bulk send failed"
-      });
+      return res
+
+        .status(500)
+
+        .json({
+
+
+          status:
+
+            "failed",
+
+
+          message:
+
+            error.message
+
+            ||
+
+            "Send failed"
+
+
+        });
+
+
     }
+
+
   }
+
 );
 
-// ============================================================
-// RESTORE SAVED SESSIONS
-// ============================================================
+
+/* =========================================================
+   RESTORE SESSIONS
+========================================================= */
 
 async function restoreSessions() {
 
-  // IMPORTANT:
-  // Same AUTH_PATH used by LocalAuth
-  // This fixes old sessions path mismatch.
-
-  const authDir =
-    AUTH_PATH;
 
   if (
-    !fs.existsSync(authDir)
+
+    !fs.existsSync(AUTH_DIR)
+
   ) {
 
+
     log(
-      "No previous sessions found"
+
+      "NO SAVED SESSIONS FOUND"
+
     );
 
+
     return;
+
+
   }
 
-  const folders =
-    fs.readdirSync(
-      authDir
-    )
-      .filter(
-        (folder) =>
-          folder.startsWith(
-            "session-"
-          )
-      );
+
+  let folders = [];
+
+
+  try {
+
+
+    folders =
+
+      fs
+
+        .readdirSync(AUTH_DIR)
+
+        .filter(
+
+          (name) =>
+
+            name.startsWith(
+
+              "session-"
+
+            )
+
+        );
+
+
+  }
+
+  catch (error) {
+
+
+    log(
+
+      "SESSION READ ERROR:",
+
+      error.message
+
+    );
+
+
+    return;
+
+
+  }
+
 
   log(
-    `Restoring ${folders.length} saved session(s)`
+
+    `FOUND ${folders.length} SAVED SESSIONS`
+
   );
+
 
   for (
+
     const folder
-    of folders
+
+    of
+
+    folders
+
   ) {
 
+
     const deviceId =
+
       folder.replace(
+
         /^session-/,
+
         ""
+
       );
+
 
     if (
+
       !validDeviceId(deviceId)
+
     ) {
+
       continue;
+
     }
 
-    try {
 
-      log(
-        `Restoring device: ${deviceId}`
-      );
+    log(
 
-      createDevice(
-        deviceId
-      ).catch(
+      "RESTORING DEVICE:",
+
+      deviceId
+
+    );
+
+
+    createDevice(
+
+      deviceId
+
+    )
+
+      .catch(
+
         (error) => {
 
-          log(
-            `RESTORE ERROR ${deviceId}:`,
+
+          console.error(
+
+            "RESTORE ERROR:",
+
+            deviceId,
+
             error.message
+
           );
+
+
         }
+
       );
 
-      // Don't start all Chrome instances together
-      await sleep(2000);
 
-    } catch (error) {
+    await new Promise(
 
-      log(
-        `RESTORE SETUP ERROR ${deviceId}:`,
-        error.message
-      );
-    }
+      (resolve) =>
+
+        setTimeout(
+
+          resolve,
+
+          3000
+
+        )
+
+    );
+
+
   }
+
+
 }
 
-// ============================================================
-// EXPRESS ERROR HANDLER
-// ============================================================
+
+/* =========================================================
+   EXPRESS ERROR HANDLER
+========================================================= */
 
 app.use(
+
   (
+
     error,
+
     req,
+
     res,
+
     next
+
   ) => {
 
-    log(
+
+    console.error(
+
       "EXPRESS ERROR:",
-      error.stack ||
-      error.message
+
+      error
+
     );
 
-    if (
-      res.headersSent
-    ) {
-      return next(error);
-    }
 
-    return res.status(500).json({
-      status:
-        "failed",
+    return res
 
-      message:
-        error.message ||
-        "Internal server error"
-    });
+      .status(500)
+
+      .json({
+
+
+        status:
+
+          "failed",
+
+
+        message:
+
+          error.message
+
+          ||
+
+          "Internal server error"
+
+
+      });
+
+
   }
+
 );
 
-// ============================================================
-// START SERVER
-// ============================================================
+
+/* =========================================================
+   START SERVER
+========================================================= */
 
 app.listen(
+
   PORT,
+
   "0.0.0.0",
+
   async () => {
 
-    log(
-      `Server started on port ${PORT}`
-    );
 
     log(
-      `Node ID: ${NODE_ID}`
+
+      "========================================"
+
     );
+
 
     log(
-      `Maximum devices: ${MAX_DEVICES}`
+
+      `SERVER RUNNING ON PORT ${PORT}`
+
     );
+
 
     log(
-      `AUTH PATH: ${AUTH_PATH}`
+
+      `NODE ID: ${NODE_ID}`
+
     );
+
 
     log(
-      `Chrome Path: ${getChromePath() ||
-      "NOT FOUND"
-      }`
+
+      `MAX DEVICES: ${MAX_DEVICES}`
+
     );
 
-    try {
 
-      await restoreSessions();
+    log(
 
-    } catch (error) {
+      `CHROME PATH: ${CHROME_PATH}`
 
-      log(
-        "SESSION RESTORE ERROR:",
-        error.stack ||
-        error.message
-      );
-    }
+    );
+
+
+    log(
+
+      `CHROME EXISTS: ${fs.existsSync(CHROME_PATH)}`
+
+    );
+
+
+    log(
+
+      "========================================"
+
+    );
+
+
+    await restoreSessions();
+
+
   }
+
 );
 
-// ============================================================
-// GRACEFUL SHUTDOWN
-// ============================================================
 
-let shuttingDown = false;
+/* =========================================================
+   GRACEFUL SHUTDOWN
+========================================================= */
 
-async function shutdown(
-  signal
-) {
+async function shutdown(signal) {
 
-  if (shuttingDown) {
-    return;
-  }
-
-  shuttingDown = true;
 
   log(
-    `${signal} received. Shutting down...`
+
+    `${signal}: SHUTTING DOWN`
+
   );
+
+
+  const allClients =
+
+    [
+
+      ...clients.values()
+
+    ];
+
 
   await Promise.allSettled(
-    [
-      ...clients.values()
-    ].map(
+
+    allClients.map(
+
       (client) =>
+
         safeDestroy(client)
+
     )
+
   );
 
-  log(
-    "All WhatsApp clients closed"
-  );
 
   process.exit(0);
+
+
 }
 
+
 process.on(
+
   "SIGINT",
-  () =>
-    shutdown("SIGINT")
+
+  () => shutdown("SIGINT")
+
 );
 
+
 process.on(
+
   "SIGTERM",
-  () =>
-    shutdown("SIGTERM")
+
+  () => shutdown("SIGTERM")
+
 );
 
-// ============================================================
-// UNHANDLED ERRORS
-// ============================================================
+
+/* =========================================================
+   UNCAUGHT ERRORS
+========================================================= */
 
 process.on(
+
   "uncaughtException",
+
   (error) => {
 
-    log(
+
+    console.error(
+
       "UNCAUGHT EXCEPTION:",
-      error.stack ||
-      error.message
+
+      error
+
     );
+
+
   }
+
 );
 
+
 process.on(
+
   "unhandledRejection",
+
   (reason) => {
 
-    log(
+
+    console.error(
+
       "UNHANDLED REJECTION:",
+
       reason
+
     );
+
+
   }
+
 );
