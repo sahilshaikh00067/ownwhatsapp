@@ -130,7 +130,7 @@ const Dashboard = () => {
 
       <div className="bg-gray-200">
         <marquee className="text-red-600 py-2 text-[16px]">
-          NOTE = All campaigns will be delivered Between 9A.M to 6P.M - (Monday to Saturday)
+          NOTE = All campaigns will be delivered Between 10A.M to 6P.M - (Monday to Saturday)
         </marquee>
       </div>
 

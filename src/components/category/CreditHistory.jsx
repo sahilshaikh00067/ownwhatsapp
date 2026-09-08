@@ -60,7 +60,7 @@ useEffect(() => {
       {/* TOP NOTE */}
       <div className="bg-gray-200">
         <marquee className="text-red-600 py-2 text-[16px]">
-          NOTE = All campaigns will be delivered Between 9A.M to 6P.M - (Monday to Saturday) on working days.
+          NOTE = All campaigns will be delivered Between 10A.M to 6P.M - (Monday to Saturday) on working days.
         </marquee>
       </div>
 
