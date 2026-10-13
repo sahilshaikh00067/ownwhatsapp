@@ -158,8 +158,8 @@ const WhatsappScan = () => {
         data.status === "creating" || data.status === "authenticated"
           ? "connecting"
           : data.status === "qr"
-          ? "scan"
-          : "disconnected"; // not_found / error / disconnected
+            ? "scan"
+            : "disconnected"; // not_found / error / disconnected
 
       setDeviceStatus((prev) => ({ ...prev, [id]: next }));
       setDeviceError((prev) => ({ ...prev, [id]: data.error || "" }));
@@ -461,9 +461,8 @@ const WhatsappScan = () => {
               <div className="flex items-center gap-4">
                 {/* WhatsApp Icon */}
                 <div
-                  className={`w-12 h-12 rounded-full flex items-center justify-center text-white text-xl font-bold ${
-                    connected ? "bg-[#4DBD74]" : "bg-gray-300"
-                  }`}
+                  className={`w-12 h-12 rounded-full flex items-center justify-center text-white text-xl font-bold ${connected ? "bg-[#4DBD74]" : "bg-gray-300"
+                    }`}
                 >
                   {connected ? "✓" : "📱"}
                 </div>
@@ -473,8 +472,8 @@ const WhatsappScan = () => {
                     {deviceInfo[d]?.number
                       ? `+${deviceInfo[d].number}`
                       : deviceStatus[d] === "connecting"
-                      ? "Connecting..."
-                      : "Not Connected"}
+                        ? "Connecting..."
+                        : "Not Connected"}
                   </p>
 
                   {deviceInfo[d]?.name && (
@@ -565,8 +564,8 @@ const WhatsappScan = () => {
               {phase === "qr"
                 ? "✅ QR ready — scan now before it expires"
                 : phase === "error"
-                ? "❌ Could not get a QR code"
-                : `⏳ Waiting for the server... ${elapsed}s`}
+                  ? "❌ Could not get a QR code"
+                  : `⏳ Waiting for the server... ${elapsed}s`}
             </p>
 
             <div className="flex justify-center gap-2">

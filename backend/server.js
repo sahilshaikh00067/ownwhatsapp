@@ -44,6 +44,12 @@ const PROTOCOL_TIMEOUT_MS = Number(process.env.PROTOCOL_TIMEOUT_MS || 5 * 60 * 1
 // On very low RAM (Render 512 MB) set CHROME_SINGLE_PROCESS=1 if Chrome keeps crashing.
 const SINGLE_PROCESS = process.env.CHROME_SINGLE_PROCESS === "1";
 
+// If Chrome is missing at runtime (Render build did not install it) the server downloads it itself.
+// Set CHROME_AUTO_INSTALL=0 to disable.
+const CHROME_CACHE_DIR = process.env.PUPPETEER_CACHE_DIR || path.join(__dirname, ".cache", "puppeteer");
+const CHROME_AUTO_INSTALL = process.env.CHROME_AUTO_INSTALL !== "0";
+const CHROME_INSTALL_TIMEOUT_MS = Number(process.env.CHROME_INSTALL_TIMEOUT_MS || 5 * 60 * 1000);
+
 // Render: attach a Persistent Disk (paid) and set SESSIONS_DIR=/var/data/sessions,
 // otherwise WhatsApp login sessions are wiped on every deploy / restart / sleep.
 const SESSIONS_DIR = process.env.SESSIONS_DIR || path.join(__dirname, "sessions");
@@ -59,25 +65,26 @@ try {
 
 
 /* =========================================================
-   CHROME DETECTION
+   CHROME DETECTION + RUNTIME INSTALL
 ========================================================= */
 
 const CHROME_NOT_FOUND_MSG =
   "CHROME_NOT_FOUND: Chrome is not installed on this server. " +
-  "Add puppeteer.config.cjs, set Build Command to 'npm install && npx puppeteer browsers install chrome', " +
+  "Put puppeteer.config.cjs next to package.json, set Render Build Command to 'npm run build', " +
   "then redeploy with 'Clear build cache & deploy'.";
 
-function resolveChromePath() {
-  const candidates = [process.env.PUPPETEER_EXECUTABLE_PATH, process.env.CHROME_PATH];
+function chromeCandidates() {
+  const list = [process.env.PUPPETEER_EXECUTABLE_PATH, process.env.CHROME_PATH];
 
   try {
-    candidates.push(puppeteer.executablePath());
+    list.push(puppeteer.executablePath());
   } catch (_) {
     /* ignore */
   }
 
-  // Chrome downloaded by Puppeteer (project .cache via puppeteer.config.cjs, or default cache folders)
+  // Chrome downloaded by Puppeteer (project .cache, default cache folders, runtime install)
   const cacheRoots = [
+    CHROME_CACHE_DIR,
     path.join(__dirname, ".cache", "puppeteer"),
     path.join(process.cwd(), ".cache", "puppeteer"),
     path.join(os.homedir(), ".cache", "puppeteer"),
@@ -88,8 +95,8 @@ function resolveChromePath() {
     try {
       const base = path.join(root, "chrome");
       for (const version of fs.readdirSync(base).sort().reverse()) {
-        candidates.push(path.join(base, version, "chrome-linux64", "chrome"));
-        candidates.push(path.join(base, version, "chrome-linux", "chrome"));
+        list.push(path.join(base, version, "chrome-linux64", "chrome"));
+        list.push(path.join(base, version, "chrome-linux", "chrome"));
       }
     } catch (_) {
       /* folder does not exist */
@@ -97,14 +104,100 @@ function resolveChromePath() {
   }
 
   // System installs (Docker / apt)
-  candidates.push(
+  list.push(
     "/usr/bin/google-chrome-stable",
     "/usr/bin/google-chrome",
     "/usr/bin/chromium",
     "/usr/bin/chromium-browser"
   );
 
-  return candidates.find((p) => p && fs.existsSync(p)) || "";
+  return [...new Set(list.filter(Boolean))];
+}
+
+const resolveChromePath = () => chromeCandidates().find((p) => fs.existsSync(p)) || "";
+
+// @puppeteer/browsers ships with Puppeteer; find it even if npm nested it
+function loadBrowsersApi() {
+  try {
+    return require("@puppeteer/browsers");
+  } catch (_) {
+    /* try next */
+  }
+
+  try {
+    const from = path.dirname(require.resolve("puppeteer"));
+    return require(require.resolve("@puppeteer/browsers", { paths: [from] }));
+  } catch (_) {
+    return null;
+  }
+}
+
+async function installChrome() {
+  const api = loadBrowsersApi();
+  if (!api) throw new Error("@puppeteer/browsers module not found");
+
+  const { install, Browser, detectBrowserPlatform, resolveBuildId } = api;
+
+  const platform = detectBrowserPlatform();
+  if (!platform) throw new Error("this operating system is not supported by the Chrome downloader");
+
+  // The Chrome version this Puppeteer release is built for
+  let buildId = puppeteer.PUPPETEER_REVISIONS && puppeteer.PUPPETEER_REVISIONS.chrome;
+  if (!buildId) buildId = await resolveBuildId(Browser.CHROME, platform, "stable");
+
+  log("CHROME NOT FOUND. DOWNLOADING:", buildId, "->", CHROME_CACHE_DIR);
+
+  let lastQuarter = -1;
+
+  const options = {
+    browser: Browser.CHROME,
+    buildId,
+    cacheDir: CHROME_CACHE_DIR,
+    unpack: true,
+    downloadProgressCallback: (downloaded, total) => {
+      const quarter = total ? Math.floor((downloaded / total) * 4) : 0;
+
+      if (quarter !== lastQuarter) {
+        lastQuarter = quarter;
+        log(`CHROME DOWNLOAD: ${Math.round(downloaded / 1048576)} / ${Math.round(total / 1048576)} MB`);
+      }
+    },
+  };
+
+  // Optional mirror (same variable Puppeteer itself uses)
+  if (process.env.PUPPETEER_CHROME_DOWNLOAD_BASE_URL) {
+    options.baseUrl = process.env.PUPPETEER_CHROME_DOWNLOAD_BASE_URL;
+  }
+
+  const installed = await install(options);
+
+  log("CHROME INSTALLED:", installed.executablePath);
+  return installed.executablePath;
+}
+
+let chromeInstallPromise = null;
+
+// One download at a time, shared by every device that needs Chrome
+function ensureChrome() {
+  const found = resolveChromePath();
+  if (found) return Promise.resolve(found);
+
+  if (!CHROME_AUTO_INSTALL) return Promise.reject(new Error(CHROME_NOT_FOUND_MSG));
+
+  if (!chromeInstallPromise) {
+    chromeInstallPromise = withTimeout(installChrome(), CHROME_INSTALL_TIMEOUT_MS, "download timed out")
+      .catch((error) => {
+        throw new Error(
+          `CHROME_INSTALL_FAILED: ${String(error.message || error).slice(0, 300)}. ` +
+            "Set Render Build Command to 'npm run build' (needs puppeteer.config.cjs) or deploy with the Dockerfile."
+        );
+      })
+      .finally(() => {
+        chromeInstallPromise = null;
+      });
+  }
+
+  return chromeInstallPromise;
 }
 
 let PUPPETEER_VERSION = "unknown";
@@ -120,6 +213,13 @@ console.log("========================================");
 console.log("PUPPETEER VERSION:", PUPPETEER_VERSION);
 console.log("CHROME EXECUTABLE:", CHROME_PATH_AT_BOOT || "NOT FOUND");
 console.log("CHROME EXISTS:", Boolean(CHROME_PATH_AT_BOOT));
+
+if (!CHROME_PATH_AT_BOOT) {
+  console.log("CHROME CACHE DIR:", CHROME_CACHE_DIR, fs.existsSync(CHROME_CACHE_DIR) ? "(exists)" : "(missing)");
+  console.log("CHROME AUTO INSTALL:", CHROME_AUTO_INSTALL ? "ON (downloads on first Add Device)" : "OFF");
+  console.log("CWD:", process.cwd(), "| DIRNAME:", __dirname);
+}
+
 console.log("SESSIONS_DIR:", SESSIONS_DIR);
 console.log("========================================");
 
@@ -205,7 +305,7 @@ if (API_KEY) {
 app.use(
   rateLimit({
     windowMs: 60 * 1000,
-    max: 300,
+    limit: 300,
     standardHeaders: true,
     legacyHeaders: false,
   })
@@ -219,6 +319,7 @@ app.use(
 const clients = new Map();   // deviceId -> whatsapp-web.js Client
 const devices = new Map();   // deviceId -> { status, qr, number, name, error, createdAt, updatedAt }
 const watchers = new Map();  // deviceId -> watchdog timer
+const pending = new Set();   // deviceIds that are inside createDevice() right now
 
 const DEVICE_RE = /^[a-zA-Z0-9_-]{1,64}$/;
 
@@ -243,6 +344,7 @@ function setDeviceState(deviceId, patch) {
     number: "",
     name: "",
     error: "",
+    note: "",
     createdAt: now(),
   };
 
@@ -254,7 +356,7 @@ function setDeviceState(deviceId, patch) {
 // Only touch the state if nobody has started a fresh client for this device meanwhile
 function failDevice(deviceId, patch) {
   if (clients.has(deviceId)) return;
-  setDeviceState(deviceId, { qr: "", number: "", name: "", ...patch });
+  setDeviceState(deviceId, { qr: "", number: "", name: "", note: "", ...patch });
 }
 
 function withTimeout(promise, ms, label) {
@@ -483,23 +585,39 @@ function attachEvents(client, deviceId, isCurrent) {
 async function createDevice(deviceId) {
   if (!validDeviceId(deviceId)) throw new Error("INVALID_DEVICE_ID");
 
-  if (clients.has(deviceId)) return clients.get(deviceId);
+  if (clients.has(deviceId) || pending.has(deviceId)) return clients.get(deviceId);
 
-  if (clients.size >= MAX_DEVICES) {
+  if (new Set([...clients.keys(), ...pending]).size >= MAX_DEVICES) {
     const message = `MAX_DEVICES_REACHED: server allows ${MAX_DEVICES} devices. Delete an unused device first.`;
     setDeviceState(deviceId, { status: "error", qr: "", number: "", name: "", error: message });
     throw new Error(message);
   }
 
+  pending.add(deviceId);
+
   // State is set BEFORE anything can fail, so /get-qr never answers "not_found" for a device being created
-  setDeviceState(deviceId, { status: "creating", qr: "", number: "", name: "", error: "" });
+  setDeviceState(deviceId, { status: "creating", qr: "", number: "", name: "", error: "", note: "" });
 
   let client = null;
   const isCurrent = () => client !== null && clients.get(deviceId) === client;
 
   try {
-    const chromePath = resolveChromePath();
-    if (!chromePath) throw new Error(CHROME_NOT_FOUND_MSG);
+    let chromePath = resolveChromePath();
+
+    if (!chromePath) {
+      if (CHROME_AUTO_INSTALL) {
+        setDeviceState(deviceId, {
+          note: "Downloading Chrome on the server (first time only, about 1-2 minutes)...",
+        });
+      }
+
+      chromePath = await ensureChrome();
+
+      // Deleted (or failed) while Chrome was downloading
+      if (devices.get(deviceId)?.status !== "creating") return null;
+
+      setDeviceState(deviceId, { note: "" });
+    }
 
     clearChromeLocks(deviceId);
 
@@ -542,7 +660,7 @@ async function createDevice(deviceId) {
     console.error("CREATE DEVICE ERROR:", deviceId, error);
 
     // Ignore errors caused by our own teardown / watchdog / delete
-    if (client === null || isCurrent()) {
+    if (devices.has(deviceId) && (client === null || isCurrent())) {
       if (client) await teardownClient(deviceId);
       else clearWatch(deviceId);
 
@@ -553,6 +671,8 @@ async function createDevice(deviceId) {
     }
 
     throw error;
+  } finally {
+    pending.delete(deviceId);
   }
 }
 
@@ -581,21 +701,37 @@ app.get("/health", async (req, res) => {
       name: data.name,
       waState,
       error: data.error,
+      note: data.note,
     });
   }
 
   const chromePath = resolveChromePath();
 
-  return res.json({
+  const body = {
     status: "ok",
     node: NODE_ID,
     uptime: Math.floor(process.uptime()),
     chromePath,
     chromeExists: Boolean(chromePath),
+    chromeInstalling: Boolean(chromeInstallPromise),
+    chromeAutoInstall: CHROME_AUTO_INSTALL,
     devices: list,
     totalDevices: clients.size,
     maxDevices: MAX_DEVICES,
-  });
+  };
+
+  // /health?debug=1 shows where the server looked for Chrome
+  if (req.query.debug === "1") {
+    body.debug = {
+      cwd: process.cwd(),
+      dirname: __dirname,
+      cacheDir: CHROME_CACHE_DIR,
+      cacheDirExists: fs.existsSync(CHROME_CACHE_DIR),
+      candidates: chromeCandidates().map((p) => ({ path: p, exists: fs.existsSync(p) })),
+    };
+  }
+
+  return res.json(body);
 });
 
 
@@ -608,7 +744,7 @@ app.get("/create-device", (req, res) => {
     return res.status(400).json({ status: "failed", message: "Invalid deviceId" });
   }
 
-  if (clients.has(deviceId)) {
+  if (clients.has(deviceId) || pending.has(deviceId)) {
     const data = getDeviceState(deviceId);
 
     return res.json({
@@ -618,6 +754,7 @@ app.get("/create-device", (req, res) => {
       ready: data?.status === "ready",
       exists: true,
       error: data?.error || "",
+      note: data?.note || "",
     });
   }
 
@@ -628,7 +765,7 @@ app.get("/create-device", (req, res) => {
 
   const data = getDeviceState(deviceId);
 
-  // Failed immediately (e.g. Chrome missing): tell the frontend right away
+  // Failed immediately (e.g. too many devices): tell the frontend right away
   if (data?.status === "error") {
     return res.json({
       status: "error",
@@ -647,6 +784,7 @@ app.get("/create-device", (req, res) => {
     qr: "",
     ready: false,
     exists: false,
+    note: data?.note || "",
     node: NODE_ID,
   });
 });
@@ -681,6 +819,7 @@ app.get("/get-qr", (req, res) => {
     ready: data.status === "ready",
     exists: clients.has(deviceId),
     error: data.error || "",
+    note: data.note || "",
     number: data.number || "",
     name: data.name || "",
   });
@@ -817,9 +956,10 @@ app.get("/logout", async (req, res) => {
 /* ---------- SEND SINGLE MESSAGE ---------- */
 
 app.post("/send-single", async (req, res) => {
-  const deviceId = String(req.body.deviceId || "");
-  const number = normalizeNumber(req.body.number);
-  const message = String(req.body.message || "").trim();
+  const body = req.body || {}; // Express 5: req.body is undefined when no body was sent
+  const deviceId = String(body.deviceId || "");
+  const number = normalizeNumber(body.number);
+  const message = String(body.message || "").trim();
 
   if (!validDeviceId(deviceId)) {
     return res.status(400).json({ status: "failed", message: "Valid deviceId required" });
@@ -963,7 +1103,13 @@ app.use((error, req, res, next) => {
    START SERVER
 ========================================================= */
 
-app.listen(PORT, "0.0.0.0", async () => {
+app.listen(PORT, "0.0.0.0", async (error) => {
+  // Express 5 passes startup errors (e.g. port already in use) to this callback
+  if (error) {
+    console.error("LISTEN ERROR:", error);
+    process.exit(1);
+  }
+
   log("========================================");
   log(`SERVER RUNNING ON PORT ${PORT}`);
   log(`NODE ID: ${NODE_ID}`);
