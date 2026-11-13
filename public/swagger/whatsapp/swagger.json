@@ -1,0 +1,1021 @@
+{
+    "openapi": "3.0.4",
+    "info": {
+        "title": "WhatsApp API",
+        "version": "v1"
+    },
+    "paths": {
+        "/api/v1/user/balance": {
+            "get": {
+                "tags": [
+                    "Balance"
+                ],
+                "summary": "Get Wallet Balance",
+                "description": "Returns available wallet balance across all channels.",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    }
+                }
+            }
+        },
+        "/api/v1/meta/clevertap": {
+            "post": {
+                "tags": [
+                    "CleverTap API's - Whatsapp"
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/WAClaverTapApiResponse"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/WAClaverTapApiResponse"
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/WAClaverTapApiResponse"
+                                }
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/WAClaverTapApiResponse"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/WAClaverTapApiResponse"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/meta/moengage": {
+            "post": {
+                "tags": [
+                    "Moengage API's - Whatsapp"
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/WaMoengageApiResponse"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/WaMoengageApiResponse"
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/WaMoengageApiResponse"
+                                }
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/WaMoengageApiResponse"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/WaMoengageApiResponse"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/meta/webengage": {
+            "post": {
+                "tags": [
+                    "Moengage API's - Whatsapp"
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/WaWebEngageApiResponse"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/WaWebEngageApiResponse"
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/WaWebEngageApiResponse"
+                                }
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/WaWebEngageApiResponse"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/WaWebEngageApiResponse"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/meta/templates": {
+            "get": {
+                "tags": [
+                    "Moengage/Meta API's Templates"
+                ],
+                "summary": "Get templates",
+                "description": "Returns paginated WhatsApp templates from local DB.",
+                "operationId": "GetTemplates",
+                "parameters": [
+                    {
+                        "name": "page",
+                        "in": "query",
+                        "schema": {
+                            "type": "integer",
+                            "format": "int32",
+                            "default": 1
+                        }
+                    },
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "schema": {
+                            "type": "integer",
+                            "format": "int32",
+                            "default": 50
+                        }
+                    },
+                    {
+                        "name": "start_date",
+                        "in": "query",
+                        "schema": {
+                            "type": "string",
+                            "default": ""
+                        }
+                    },
+                    {
+                        "name": "end_date",
+                        "in": "query",
+                        "schema": {
+                            "type": "string",
+                            "default": ""
+                        }
+                    },
+                    {
+                        "name": "template_name",
+                        "in": "query",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/PagedTemplateResponse"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/meta/templates/{templateId}": {
+            "get": {
+                "tags": [
+                    "Moengage/Meta API's Templates"
+                ],
+                "parameters": [
+                    {
+                        "name": "templateId",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    }
+                }
+            }
+        },
+        "/api/v1/meta/templates/sync": {
+            "post": {
+                "tags": [
+                    "Moengage/Meta API's Templates"
+                ],
+                "parameters": [
+                    {
+                        "name": "startDate",
+                        "in": "query",
+                        "schema": {
+                            "type": "string",
+                            "format": "date-time"
+                        }
+                    },
+                    {
+                        "name": "endDate",
+                        "in": "query",
+                        "schema": {
+                            "type": "string",
+                            "format": "date-time"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    }
+                }
+            }
+        },
+        "/api/v1/meta/webhook": {
+            "post": {
+                "tags": [
+                    "WhatsApp API"
+                ],
+                "summary": "Webhook",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    }
+                }
+            }
+        },
+        "/{version}/{wabaId}/message_templates": {
+            "get": {
+                "tags": [
+                    "WhatsApp API"
+                ],
+                "summary": "Get Templates",
+                "description": "Fetches all message templates associated with a given WABA ID.",
+                "parameters": [
+                    {
+                        "name": "version",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "pattern": "^v\\d+\\.\\d+$",
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "wabaId",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "schema": {
+                            "type": "integer",
+                            "format": "int32"
+                        }
+                    },
+                    {
+                        "name": "after",
+                        "in": "query",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    }
+                }
+            },
+            "post": {
+                "tags": [
+                    "WhatsApp API"
+                ],
+                "summary": "Create Template",
+                "description": "Creates a new WhatsApp message template for a specific WABA ID.",
+                "parameters": [
+                    {
+                        "name": "version",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "pattern": "^v\\d+\\.\\d+$",
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "wabaId",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/BaseCreateTemplateMessageRequest"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    }
+                }
+            },
+            "delete": {
+                "tags": [
+                    "WhatsApp API"
+                ],
+                "summary": "Delete Template",
+                "description": "Deletes an existing WhatsApp message template using its HSM ID and name.",
+                "parameters": [
+                    {
+                        "name": "version",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "pattern": "^v\\d+\\.\\d+$",
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "wabaId",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "hsm_id",
+                        "in": "query",
+                        "required": true,
+                        "schema": {
+                            "type": "integer",
+                            "format": "int64"
+                        }
+                    },
+                    {
+                        "name": "name",
+                        "in": "query",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    }
+                }
+            }
+        },
+        "/{version}/{id}": {
+            "get": {
+                "tags": [
+                    "WhatsApp API"
+                ],
+                "summary": "Get Template or Media By ID",
+                "description": "If phone_number_id is passed → Media API. Otherwise → Template API.",
+                "operationId": "GetGraphNode",
+                "parameters": [
+                    {
+                        "name": "version",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "pattern": "^v\\d+\\.\\d+$",
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer",
+                            "format": "int64"
+                        }
+                    },
+                    {
+                        "name": "phone_number_id",
+                        "in": "query",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    }
+                }
+            }
+        },
+        "/{version}/{templateId}": {
+            "post": {
+                "tags": [
+                    "WhatsApp API"
+                ],
+                "summary": "Edit Template",
+                "description": "Updates an existing template by ID.",
+                "parameters": [
+                    {
+                        "name": "version",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "pattern": "^v\\d+\\.\\d+$",
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "templateId",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer",
+                            "format": "int64"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/BaseCreateTemplateMessageRequest"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    }
+                }
+            }
+        },
+        "/{version}/{phoneNumberId}/messages": {
+            "post": {
+                "tags": [
+                    "WhatsApp API"
+                ],
+                "summary": "Send WhatsApp Message",
+                "description": "Sends a WhatsApp message using a phone number ID.",
+                "parameters": [
+                    {
+                        "name": "version",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "pattern": "^v\\d+\\.\\d+$",
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "phoneNumberId",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "description": "Raw JSON payload (schema-less)"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    }
+                }
+            }
+        },
+        "/{version}/channels": {
+            "get": {
+                "tags": [
+                    "WhatsApp API"
+                ],
+                "summary": "Get Channels",
+                "description": "Retrieves all channels associated with a WABA ID.",
+                "parameters": [
+                    {
+                        "name": "version",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "pattern": "^v\\d+\\.\\d+$",
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    }
+                }
+            }
+        },
+        "/{version}/{phoneNumberId}/media": {
+            "post": {
+                "tags": [
+                    "WhatsApp Media API"
+                ],
+                "summary": "Upload WhatsApp Media",
+                "description": "Uploads media to Meta WhatsApp Cloud API and returns media_id",
+                "parameters": [
+                    {
+                        "name": "version",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "pattern": "^v\\d+\\.\\d+$",
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "phoneNumberId",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "multipart/form-data": {
+                            "schema": {
+                                "required": [
+                                    "file"
+                                ],
+                                "type": "object",
+                                "properties": {
+                                    "file": {
+                                        "type": "string",
+                                        "format": "binary"
+                                    }
+                                }
+                            },
+                            "encoding": {
+                                "file": {
+                                    "style": "form"
+                                }
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    }
+                }
+            }
+        }
+    },
+    "components": {
+        "schemas": {
+            "BaseCreateTemplateMessageRequest": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "category": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "allow_category_change": {
+                        "type": "boolean",
+                        "nullable": true
+                    },
+                    "language": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "library_template_name": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "LIBRARY_TEMPLATE_BUTTON_INPUTS": {
+                        "type": "array",
+                        "items": {},
+                        "nullable": true
+                    },
+                    "components": {
+                        "type": "array",
+                        "items": {},
+                        "nullable": true
+                    }
+                },
+                "additionalProperties": false
+            },
+            "ErrorResponse": {
+                "type": "object",
+                "properties": {
+                    "emailAddress": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "error": {
+                        "type": "string",
+                        "nullable": true
+                    }
+                },
+                "additionalProperties": false
+            },
+            "PagedTemplateResponse": {
+                "type": "object",
+                "properties": {
+                    "total_count": {
+                        "type": "integer",
+                        "format": "int32"
+                    },
+                    "page": {
+                        "type": "integer",
+                        "format": "int32"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "format": "int32"
+                    },
+                    "total_pages": {
+                        "type": "integer",
+                        "format": "int32",
+                        "readOnly": true
+                    },
+                    "templates": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/TemplateResponseDto"
+                        },
+                        "nullable": true
+                    }
+                },
+                "additionalProperties": false
+            },
+            "ProviderButton": {
+                "type": "object",
+                "properties": {
+                    "type": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "data": {
+                        "$ref": "#/components/schemas/ProviderButtonData"
+                    }
+                },
+                "additionalProperties": false
+            },
+            "ProviderButtonData": {
+                "type": "object",
+                "properties": {
+                    "button_text": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "action": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "action_type": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "action_value": {
+                        "type": "string",
+                        "nullable": true
+                    }
+                },
+                "additionalProperties": false
+            },
+            "ProviderCarousel": {
+                "type": "object",
+                "properties": {
+                    "cards": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/ProviderCarouselCard"
+                        },
+                        "nullable": true
+                    }
+                },
+                "additionalProperties": false
+            },
+            "ProviderCarouselCard": {
+                "type": "object",
+                "properties": {
+                    "header": {
+                        "$ref": "#/components/schemas/ProviderHeader"
+                    },
+                    "body": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "buttons": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/ProviderButton"
+                        },
+                        "nullable": true
+                    }
+                },
+                "additionalProperties": false
+            },
+            "ProviderContent": {
+                "type": "object",
+                "properties": {
+                    "header": {
+                        "$ref": "#/components/schemas/ProviderHeader"
+                    },
+                    "body": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "footer": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "limited_time_offer": {
+                        "$ref": "#/components/schemas/ProviderLimitedTimeOffer"
+                    },
+                    "buttons": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/ProviderButton"
+                        },
+                        "nullable": true
+                    },
+                    "carousel": {
+                        "$ref": "#/components/schemas/ProviderCarousel"
+                    }
+                },
+                "additionalProperties": false
+            },
+            "ProviderHeader": {
+                "type": "object",
+                "properties": {
+                    "type": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "media_type": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "text": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "source": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "url": {
+                        "type": "string",
+                        "nullable": true
+                    }
+                },
+                "additionalProperties": false
+            },
+            "ProviderLimitedTimeOffer": {
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "has_expiration": {
+                        "type": "boolean"
+                    }
+                },
+                "additionalProperties": false
+            },
+            "TemplateResponseDto": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "integer",
+                        "format": "int32"
+                    },
+                    "template_id": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "name": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "language": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "category_name": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "content": {
+                        "$ref": "#/components/schemas/ProviderContent"
+                    },
+                    "state": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "created_at": {
+                        "type": "string",
+                        "format": "date-time"
+                    },
+                    "updated_at": {
+                        "type": "string",
+                        "format": "date-time"
+                    },
+                    "last_synced_at": {
+                        "type": "string",
+                        "format": "date-time"
+                    }
+                },
+                "additionalProperties": false
+            },
+            "WAClaverTapApiResponse": {
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "integer",
+                        "format": "int32"
+                    },
+                    "id": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "status": {
+                        "type": "boolean"
+                    }
+                },
+                "additionalProperties": false
+            },
+            "WaMoengageApiResponse": {
+                "type": "object",
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "error": {
+                        "nullable": true
+                    }
+                },
+                "additionalProperties": false
+            },
+            "WaWebEngageApiResponse": {
+                "type": "object",
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "statusCode": {
+                        "type": "integer",
+                        "format": "int32"
+                    }
+                },
+                "additionalProperties": false
+            }
+        },
+        "securitySchemes": {
+            "Bearer": {
+                "type": "http",
+                "description": "Enter Bearer token in the format: **Bearer &lt;token&gt;**",
+                "scheme": "bearer",
+                "bearerFormat": "JWT"
+            }
+        }
+    },
+    "security": [
+        {
+            "Bearer": []
+        }
+    ]
+}

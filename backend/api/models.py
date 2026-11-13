@@ -5,29 +5,21 @@ from django.db import models
 # USER
 # ============================================================
 
-class User(models.Model):
 
+class User(models.Model):
     ROLE_CHOICES = (
         ("admin", "Admin"),
         ("reseller", "Reseller"),
         ("user", "User"),
     )
 
-    username = models.CharField(
-        max_length=100,
-        unique=True
-    )
-
-    password = models.CharField(
-        max_length=255
-    )
-
+    username = models.CharField(max_length=100, unique=True)
+    password = models.CharField(max_length=255)
     role = models.CharField(
         max_length=20,
         choices=ROLE_CHOICES,
         default="user"
     )
-
     parent = models.ForeignKey(
         "self",
         on_delete=models.SET_NULL,
@@ -35,19 +27,20 @@ class User(models.Model):
         blank=True,
         related_name="children"
     )
+    credit = models.IntegerField(default=0)
+    status = models.CharField(max_length=10, default="Active")
+    created_at = models.DateTimeField(auto_now_add=True)
 
-    credit = models.IntegerField(
-        default=0
-    )
+    def save(self, *args, **kwargs):
+        if self.credit < 0:
+            self.credit = 0
+        super().save(*args, **kwargs)
 
-    status = models.CharField(
-        max_length=10,
-        default="Active"
-    )
+    def __str__(self):
+        return f"{self.username} ({self.role})"
 
-    created_at = models.DateTimeField(
-        auto_now_add=True
-    )
+
+
 
 def save(self, *args, **kwargs):
     if self.credit < 0:
