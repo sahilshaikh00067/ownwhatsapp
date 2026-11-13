@@ -312,7 +312,7 @@ async function loginRequest(payload, attempt = 0) {
   }
 }
 
-/* ======================= COMPONENT ======================= */
+/* ==================== COMPONENT ==================== */
 export default function Login() {
   const navigate = useNavigate();
 

@@ -18,7 +18,7 @@ venv/
 staticfiles/
 media/
 
-# Environment variables
+# Environment variable
 .env
 .env.*
 !.env.example
