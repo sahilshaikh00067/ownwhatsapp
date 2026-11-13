@@ -38,8 +38,7 @@ import WappPayment from "./components/category/WappPayment";
 import WappApiConsole from "./components/category/WappApiConsole";
 
 // Products Home page (login ke baad yahi khulega)
-import ProductsHome from "./components/ProductsHome";
-
+import ProductsHome from "./components/Productshome";
 // 🔥 Login ke baad pehle ProductsHome dikhao.
 // Jab tak user ProductsHome nahi dekh leta, Header/Sidebar wale pages redirect ho jaayenge.
 function HomeGate({ children }) {
