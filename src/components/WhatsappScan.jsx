@@ -8,8 +8,8 @@ import { useNavigate } from "react-router-dom";
 const API = "https://ownwhatsapp-backend.onrender.com"; // backend URL (change only here)
 const STORAGE_KEY = "wapp_devices";
 
-const QR_POLL_MS = 1500;
-const STATUS_POLL_MS = 5000;
+const QR_POLL_MS = 4000;
+const STATUS_POLL_MS = 15000;
 const QR_MAX_WAIT_MS = 5 * 60 * 1000; // Chrome can be slow to start on a small Render instance
 
 
@@ -61,8 +61,7 @@ async function api(path, params = {}, timeoutMs = 20000) {
   }
 }
 
-const TRANSIENT = [429, 502, 503, 504]; // Render is waking up / busy: just retry
-
+const TRANSIENT = [502, 503, 504];
 
 /* =========================================================
    STATUS BADGE
@@ -136,8 +135,12 @@ const WhatsappScan = () => {
 
   const refreshStatus = useCallback(async (id) => {
     try {
-      const { data } = await api("/get-device", { deviceId: id });
+      const { status, data } = await api("/get-device", { deviceId: id });
 
+      if (status === 429) {
+        console.warn("Cloudflare rate limit: status polling paused.");
+        return;
+      }
       // Connected means the server says ready. A saved phone number alone is not enough.
       if (data.ready === true) {
         setDeviceStatus((prev) => ({ ...prev, [id]: "connected" }));
@@ -194,22 +197,29 @@ const WhatsappScan = () => {
   // Background status polling
   useEffect(() => {
     const tick = async () => {
-      if (pollingRef.current || document.hidden) return;
+      if (pollingRef.current || document.hidden || showQR) return;
 
       pollingRef.current = true;
+
       try {
-        await Promise.all(devicesRef.current.map(refreshStatus));
+        // Sequential requests instead of sending all device requests together
+        for (const id of devicesRef.current) {
+          if (document.hidden || showQR) break;
+
+          await refreshStatus(id);
+          await sleep(300);
+        }
       } finally {
         pollingRef.current = false;
       }
     };
 
     tick();
+
     const timer = setInterval(tick, STATUS_POLL_MS);
 
     return () => clearInterval(timer);
-  }, [refreshStatus]);
-
+  }, [refreshStatus, showQR]);
 
   /* ---------- QR MODAL ---------- */
 
@@ -261,6 +271,12 @@ const WhatsappScan = () => {
             );
           }
 
+
+          if (res.status === 429) {
+            return fail(
+              "Cloudflare temporarily blocked requests (429). Polling stopped. Wait 5-10 minutes before trying again."
+            );
+          }
           if (TRANSIENT.includes(res.status)) {
             await sleep(2000);
             continue;
@@ -303,6 +319,17 @@ const WhatsappScan = () => {
 
         try {
           const { status, data } = await api("/get-qr", { deviceId: id });
+          if (status === 429) {
+            return fail(
+              "Cloudflare temporarily blocked QR requests (429). Automatic polling stopped. Wait 5-10 minutes before trying again."
+            );
+          }
+
+          if ([502, 503, 504].includes(status)) {
+            await sleep(5000);
+            continue;
+          }
+
           if (cancelled) return;
 
           if (status === 401) {

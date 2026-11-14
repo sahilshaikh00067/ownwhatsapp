@@ -183,7 +183,7 @@ const PAGE_HTML = `<!doctype html>
     setQr("");
     setStatus("Starting...", "");
     api("/create-device?deviceId=" + encodeURIComponent(id))
-      .then(function () { poll(); timer = setInterval(poll, 2000); })
+      .then(function () { poll(); timer = setInterval(poll, 5000); })
       .catch(function () { setStatus("Cannot reach server. Is it awake?", "err"); })
       .then(function () { busy = false; });
   }
@@ -213,7 +213,7 @@ const PAGE_HTML = `<!doctype html>
 
   // If this device already exists on the server, show its state right away
   api("/get-qr?deviceId=" + encodeURIComponent(devId())).then(function (d) {
-    if (d.status && d.status !== "not_found") { render(d); if (d.status !== "ready" && d.status !== "error" && d.status !== "disconnected") timer = setInterval(poll, 2000); }
+    if (d.status && d.status !== "not_found") { render(d); if (d.status !== "ready" && d.status !== "error" && d.status !== "disconnected") timer = setInterval(poll, 5000); }
   }).catch(function () {});
 })();
 </script>
