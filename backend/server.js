@@ -6,8 +6,8 @@
  *   creating -> qr -> authenticated -> ready
  *   (any stage) -> error | disconnected
  *
- * Every failure is stored in the device state with a readable message, so the
- * frontend can show it instead of spinning forever.
+ * Open  https://YOUR-APP.onrender.com/app  -> click "Connect WhatsApp" -> scan QR.
+ * The same API is used by your React frontend (unchanged endpoints).
  */
 
 "use strict";
@@ -35,17 +35,23 @@ const NODE_ID = process.env.NODE_ID || "node1";
 const MAX_DEVICES = Number(process.env.MAX_DEVICES || 20);
 const API_KEY = process.env.API_KEY || "";
 
-// Watchdogs: if a stage hangs, show an error and close Chrome (frees RAM).
-const INIT_TIMEOUT_MS = Number(process.env.INIT_TIMEOUT_MS || 4 * 60 * 1000);   // Chrome + WhatsApp Web load
+// Watchdogs: if a stage hangs, retry / show an error and close Chrome (frees RAM).
+const INIT_TIMEOUT_MS = Number(process.env.INIT_TIMEOUT_MS || 3 * 60 * 1000);   // Chrome + WhatsApp Web load (until QR)
 const QR_TIMEOUT_MS = Number(process.env.QR_TIMEOUT_MS || 3 * 60 * 1000);       // until the QR is scanned
 const READY_TIMEOUT_MS = Number(process.env.READY_TIMEOUT_MS || 5 * 60 * 1000); // chats load after scan
 const PROTOCOL_TIMEOUT_MS = Number(process.env.PROTOCOL_TIMEOUT_MS || 5 * 60 * 1000);
 
+// If QR does not appear in time, the server restarts Chrome by itself this many times.
+const MAX_AUTO_RETRIES = Number(process.env.MAX_AUTO_RETRIES || 2);
+
+// Optional: pin a WhatsApp Web version if the QR shows but "ready" never fires, e.g.
+// WEB_VERSION_URL=https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/<version>.html
+const WEB_VERSION_URL = process.env.WEB_VERSION_URL || "";
+
 // On very low RAM (Render 512 MB) set CHROME_SINGLE_PROCESS=1 if Chrome keeps crashing.
 const SINGLE_PROCESS = process.env.CHROME_SINGLE_PROCESS === "1";
 
-// If Chrome is missing at runtime (Render build did not install it) the server downloads it itself.
-// Set CHROME_AUTO_INSTALL=0 to disable.
+// If Chrome is missing at runtime the server downloads it itself. Set CHROME_AUTO_INSTALL=0 to disable.
 const CHROME_CACHE_DIR = process.env.PUPPETEER_CACHE_DIR || path.join(__dirname, ".cache", "puppeteer");
 const CHROME_AUTO_INSTALL = process.env.CHROME_AUTO_INSTALL !== "0";
 const CHROME_INSTALL_TIMEOUT_MS = Number(process.env.CHROME_INSTALL_TIMEOUT_MS || 5 * 60 * 1000);
@@ -65,13 +71,173 @@ try {
 
 
 /* =========================================================
+   BUILT-IN TEST PAGE  ->  /app
+   Mounted BEFORE helmet because it has inline script and its own CSP.
+========================================================= */
+
+const PAGE_HTML = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WhatsApp Connect</title>
+<style>
+  :root { color-scheme: light dark; --bg:#f4f6f8; --card:#fff; --text:#111b21; --muted:#667781; --green:#25d366; --red:#d93025; --border:#e2e8ec; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0b141a; --card:#1f2c34; --text:#e9edef; --muted:#8696a0; --border:#2a3942; } }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; background:var(--bg); color:var(--text); font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; padding:16px; }
+  .card { width:100%; max-width:380px; background:var(--card); border:1px solid var(--border); border-radius:16px; padding:24px; text-align:center; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  p.sub { margin:0 0 16px; color:var(--muted); font-size:14px; }
+  input { width:100%; padding:10px 12px; border-radius:10px; border:1px solid var(--border); background:transparent; color:inherit; font-size:15px; margin-bottom:12px; }
+  button { width:100%; padding:12px; border:0; border-radius:10px; font-size:16px; font-weight:600; cursor:pointer; background:var(--green); color:#04210f; margin-bottom:8px; }
+  button.secondary { background:transparent; color:var(--text); border:1px solid var(--border); font-weight:500; font-size:14px; padding:9px; }
+  #qrbox { margin:14px 0 6px; min-height:0; }
+  #qrbox img { width:100%; max-width:300px; border-radius:12px; background:#fff; padding:8px; }
+  #status { font-size:14px; margin-top:8px; color:var(--muted); white-space:pre-wrap; word-break:break-word; }
+  #status.err { color:var(--red); }
+  #status.ok { color:var(--green); font-weight:600; }
+  .hide { display:none; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Connect WhatsApp</h1>
+  <p class="sub">Click the button, then scan the QR from WhatsApp &rarr; Linked devices.</p>
+  <input id="dev" value="device1" maxlength="64" placeholder="Device ID" autocomplete="off">
+  <button id="go">Connect WhatsApp</button>
+  <div id="qrbox"></div>
+  <div id="status">Ready.</div>
+  <button id="retry" class="secondary hide">Retry (fresh QR)</button>
+  <button id="logout" class="secondary hide">Logout / Delete device</button>
+</div>
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var timer = null;
+  var busy = false;
+
+  function devId() { return $("dev").value.trim().replace(/[^a-zA-Z0-9_-]/g, ""); }
+
+  function api(p) {
+    return fetch(p, { cache: "no-store" }).then(function (r) { return r.json(); });
+  }
+
+  function setStatus(text, cls) {
+    var el = $("status");
+    el.textContent = text;
+    el.className = cls || "";
+  }
+
+  function setQr(src) {
+    var box = $("qrbox");
+    if (!src) { box.textContent = ""; return; }
+    var img = box.querySelector("img");
+    if (!img) { img = document.createElement("img"); img.alt = "WhatsApp QR"; box.appendChild(img); }
+    if (img.src !== src) img.src = src;
+  }
+
+  function stopPolling() { if (timer) { clearInterval(timer); timer = null; } }
+
+  function render(d) {
+    var s = d.status;
+    $("logout").classList.toggle("hide", s === "not_found");
+    $("retry").classList.toggle("hide", !(s === "error" || s === "disconnected" || s === "not_found"));
+
+    if (s === "ready") {
+      setQr("");
+      setStatus("Connected: +" + (d.number || "") + (d.name ? " (" + d.name + ")" : ""), "ok");
+      stopPolling();
+    } else if (s === "qr" && d.qr) {
+      setQr(d.qr);
+      setStatus("Scan this QR with your phone.", "");
+    } else if (s === "authenticated") {
+      setQr("");
+      setStatus("Scanned. Loading chats, please wait...", "");
+    } else if (s === "error" || s === "disconnected") {
+      setQr("");
+      setStatus(d.error || s, "err");
+      stopPolling();
+    } else if (s === "not_found") {
+      setQr("");
+      setStatus("Device not found. Click Connect.", "err");
+      stopPolling();
+    } else {
+      setQr("");
+      setStatus(d.note || "Starting Chrome and WhatsApp Web (can take up to a minute)...", "");
+    }
+  }
+
+  function poll() {
+    api("/get-qr?deviceId=" + encodeURIComponent(devId()))
+      .then(render)
+      .catch(function () { setStatus("Cannot reach server. Is it awake?", "err"); });
+  }
+
+  function start() {
+    if (busy) return;
+    var id = devId();
+    if (!id) { setStatus("Enter a device ID.", "err"); return; }
+    busy = true;
+    stopPolling();
+    setQr("");
+    setStatus("Starting...", "");
+    api("/create-device?deviceId=" + encodeURIComponent(id))
+      .then(function () { poll(); timer = setInterval(poll, 2000); })
+      .catch(function () { setStatus("Cannot reach server. Is it awake?", "err"); })
+      .then(function () { busy = false; });
+  }
+
+  function retry() {
+    var id = devId();
+    stopPolling();
+    setStatus("Resetting...", "");
+    api("/delete-device?deviceId=" + encodeURIComponent(id)).then(start, start);
+  }
+
+  function logout() {
+    var id = devId();
+    stopPolling();
+    setStatus("Logging out...", "");
+    api("/logout?deviceId=" + encodeURIComponent(id)).then(function () {
+      setQr("");
+      setStatus("Device removed.", "");
+      $("retry").classList.add("hide");
+      $("logout").classList.add("hide");
+    });
+  }
+
+  $("go").addEventListener("click", start);
+  $("retry").addEventListener("click", retry);
+  $("logout").addEventListener("click", logout);
+
+  // If this device already exists on the server, show its state right away
+  api("/get-qr?deviceId=" + encodeURIComponent(devId())).then(function (d) {
+    if (d.status && d.status !== "not_found") { render(d); if (d.status !== "ready" && d.status !== "error" && d.status !== "disconnected") timer = setInterval(poll, 2000); }
+  }).catch(function () {});
+})();
+</script>
+</body>
+</html>`;
+
+app.get("/app", (req, res) => {
+  res.set(
+    "Content-Security-Policy",
+    "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'self'; base-uri 'none'; form-action 'none'"
+  );
+  res.set("Cache-Control", "no-store");
+  res.type("html").send(PAGE_HTML);
+});
+
+
+/* =========================================================
    CHROME DETECTION + RUNTIME INSTALL
 ========================================================= */
 
 const CHROME_NOT_FOUND_MSG =
   "CHROME_NOT_FOUND: Chrome is not installed on this server. " +
-  "Put puppeteer.config.cjs next to package.json, set Render Build Command to 'npm run build', " +
-  "then redeploy with 'Clear build cache & deploy'.";
+  "Deploy with the Dockerfile (recommended) or set Render Build Command to 'npm run build' " +
+  "with puppeteer.config.cjs, then redeploy with 'Clear build cache & deploy'.";
 
 function chromeCandidates() {
   const list = [process.env.PUPPETEER_EXECUTABLE_PATH, process.env.CHROME_PATH];
@@ -105,10 +271,10 @@ function chromeCandidates() {
 
   // System installs (Docker / apt)
   list.push(
-    "/usr/bin/google-chrome-stable",
-    "/usr/bin/google-chrome",
     "/usr/bin/chromium",
-    "/usr/bin/chromium-browser"
+    "/usr/bin/chromium-browser",
+    "/usr/bin/google-chrome-stable",
+    "/usr/bin/google-chrome"
   );
 
   return [...new Set(list.filter(Boolean))];
@@ -189,7 +355,7 @@ function ensureChrome() {
       .catch((error) => {
         throw new Error(
           `CHROME_INSTALL_FAILED: ${String(error.message || error).slice(0, 300)}. ` +
-            "Set Render Build Command to 'npm run build' (needs puppeteer.config.cjs) or deploy with the Dockerfile."
+            "Deploy with the Dockerfile (recommended) or set Render Build Command to 'npm run build'."
         );
       })
       .finally(() => {
@@ -216,7 +382,7 @@ console.log("CHROME EXISTS:", Boolean(CHROME_PATH_AT_BOOT));
 
 if (!CHROME_PATH_AT_BOOT) {
   console.log("CHROME CACHE DIR:", CHROME_CACHE_DIR, fs.existsSync(CHROME_CACHE_DIR) ? "(exists)" : "(missing)");
-  console.log("CHROME AUTO INSTALL:", CHROME_AUTO_INSTALL ? "ON (downloads on first Add Device)" : "OFF");
+  console.log("CHROME AUTO INSTALL:", CHROME_AUTO_INSTALL ? "ON (downloads on first Connect)" : "OFF");
   console.log("CWD:", process.cwd(), "| DIRNAME:", __dirname);
 }
 
@@ -239,13 +405,15 @@ function chromeArgs() {
     "--disable-breakpad",
     "--disable-component-update",
     "--disable-default-apps",
-    "--disable-features=TranslateUI",
+    // ONE --disable-features flag only (a second one overrides the first). site-per-process off saves RAM.
+    "--disable-features=TranslateUI,site-per-process,IsolateOrigins",
     "--disable-ipc-flooding-protection",
     "--disable-sync",
     "--metrics-recording-only",
     "--mute-audio",
     "--no-first-run",
     "--no-zygote",
+    "--js-flags=--max-old-space-size=256",
   ];
 
   if (SINGLE_PROCESS) args.push("--single-process");
@@ -281,7 +449,7 @@ app.use((req, res, next) => {
 
 /* =========================================================
    API KEY (optional)
-   NOTE: the React app does not send x-api-key, so leave API_KEY
+   NOTE: /app and the React app do not send x-api-key, so leave API_KEY
    unset on Render unless you also add the header in the frontend.
 ========================================================= */
 
@@ -316,10 +484,12 @@ app.use(
    DEVICE STORAGE
 ========================================================= */
 
-const clients = new Map();   // deviceId -> whatsapp-web.js Client
-const devices = new Map();   // deviceId -> { status, qr, number, name, error, createdAt, updatedAt }
-const watchers = new Map();  // deviceId -> watchdog timer
-const pending = new Set();   // deviceIds that are inside createDevice() right now
+const clients = new Map();     // deviceId -> whatsapp-web.js Client
+const devices = new Map();     // deviceId -> { status, qr, number, name, error, createdAt, updatedAt }
+const watchers = new Map();    // deviceId -> watchdog timer
+const pending = new Set();     // deviceIds that are inside createDevice() right now
+const retrying = new Set();    // deviceIds waiting for an automatic retry
+const retryCount = new Map();  // deviceId -> automatic retries used
 
 const DEVICE_RE = /^[a-zA-Z0-9_-]{1,64}$/;
 
@@ -336,6 +506,9 @@ const validDeviceId = (deviceId) =>
   typeof deviceId === "string" && DEVICE_RE.test(deviceId);
 
 const getDeviceState = (deviceId) => devices.get(deviceId);
+
+const isBusy = (deviceId) =>
+  clients.has(deviceId) || pending.has(deviceId) || retrying.has(deviceId);
 
 function setDeviceState(deviceId, patch) {
   const oldState = devices.get(deviceId) || {
@@ -426,10 +599,44 @@ async function teardownClient(deviceId) {
 }
 
 async function removeDevice(deviceId, deleteSession = true) {
+  retryCount.delete(deviceId);
+  retrying.delete(deviceId);
+
   await teardownClient(deviceId);
   devices.delete(deviceId);
 
   if (deleteSession) deleteSessionFiles(deviceId);
+}
+
+// Restart Chrome automatically (QR did not come / Chrome failed to start). Returns false when no retries are left.
+function scheduleRetry(deviceId, reason) {
+  const used = retryCount.get(deviceId) || 0;
+
+  if (used >= MAX_AUTO_RETRIES || !devices.has(deviceId)) return false;
+
+  retryCount.set(deviceId, used + 1);
+  retrying.add(deviceId);
+
+  log(`AUTO RETRY ${used + 1}/${MAX_AUTO_RETRIES}:`, deviceId, "|", String(reason || "").slice(0, 120));
+
+  setDeviceState(deviceId, {
+    status: "creating",
+    qr: "",
+    error: "",
+    note: `Restarting Chrome automatically (${used + 1}/${MAX_AUTO_RETRIES})...`,
+  });
+
+  setTimeout(() => {
+    retrying.delete(deviceId);
+
+    if (!devices.has(deviceId)) return; // deleted meanwhile
+
+    createDevice(deviceId).catch((error) => {
+      console.error("RETRY CREATE ERROR:", deviceId, error.message);
+    });
+  }, 3000);
+
+  return true;
 }
 
 // If the device is still in `expectedStatus` after `ms`, close it and store `patch` as the new state
@@ -445,6 +652,9 @@ function watch(deviceId, expectedStatus, ms, patch, options = {}) {
     log(`WATCHDOG: ${deviceId} stuck in "${expectedStatus}" for ${Math.round(ms / 1000)}s`);
 
     await teardownClient(deviceId);
+
+    if (options.retry && scheduleRetry(deviceId, patch.error)) return;
+
     failDevice(deviceId, patch);
 
     if (options.deleteSession) deleteSessionFiles(deviceId);
@@ -494,10 +704,12 @@ function attachEvents(client, deviceId, isCurrent) {
 
       const firstQr = getDeviceState(deviceId)?.status !== "qr";
 
-      setDeviceState(deviceId, { status: "qr", qr: qrDataUrl, error: "" });
+      setDeviceState(deviceId, { status: "qr", qr: qrDataUrl, error: "", note: "" });
 
       // Timer starts at the first QR only (WhatsApp stops refreshing it after ~2 minutes)
       if (firstQr) {
+        retryCount.delete(deviceId); // Chrome works, so reset the auto-retry counter
+
         watch(
           deviceId,
           "qr",
@@ -536,12 +748,13 @@ function attachEvents(client, deviceId, isCurrent) {
     if (!isCurrent()) return;
 
     clearWatch(deviceId);
+    retryCount.delete(deviceId);
 
     const info = client.info;
     const number = info?.wid?.user || "";
     const name = info?.pushname || "";
 
-    setDeviceState(deviceId, { status: "ready", qr: "", error: "", number, name });
+    setDeviceState(deviceId, { status: "ready", qr: "", error: "", note: "", number, name });
 
     log("WHATSAPP READY:", deviceId, "| NUMBER:", number, "| NAME:", name);
   });
@@ -585,9 +798,9 @@ function attachEvents(client, deviceId, isCurrent) {
 async function createDevice(deviceId) {
   if (!validDeviceId(deviceId)) throw new Error("INVALID_DEVICE_ID");
 
-  if (clients.has(deviceId) || pending.has(deviceId)) return clients.get(deviceId);
+  if (isBusy(deviceId)) return clients.get(deviceId);
 
-  if (new Set([...clients.keys(), ...pending]).size >= MAX_DEVICES) {
+  if (new Set([...clients.keys(), ...pending, ...retrying]).size >= MAX_DEVICES) {
     const message = `MAX_DEVICES_REACHED: server allows ${MAX_DEVICES} devices. Delete an unused device first.`;
     setDeviceState(deviceId, { status: "error", qr: "", number: "", name: "", error: message });
     throw new Error(message);
@@ -626,7 +839,7 @@ async function createDevice(deviceId) {
     log("CHROME PATH:", chromePath);
     log("========================================");
 
-    client = new Client({
+    const clientOptions = {
       authStrategy: new LocalAuth({ clientId: deviceId, dataPath: AUTH_DIR }),
 
       puppeteer: {
@@ -639,17 +852,29 @@ async function createDevice(deviceId) {
 
       takeoverOnConflict: true,
       takeoverTimeoutMs: 0,
-    });
+    };
+
+    if (WEB_VERSION_URL) {
+      clientOptions.webVersionCache = { type: "remote", remotePath: WEB_VERSION_URL };
+    }
+
+    client = new Client(clientOptions);
 
     clients.set(deviceId, client);
     attachEvents(client, deviceId, isCurrent);
 
-    watch(deviceId, "creating", INIT_TIMEOUT_MS, {
-      status: "error",
-      error:
-        "INIT_TIMEOUT: Chrome / WhatsApp Web did not load in time. " +
-        "The server is probably too slow or out of memory. Click Retry or use a bigger instance.",
-    });
+    watch(
+      deviceId,
+      "creating",
+      INIT_TIMEOUT_MS,
+      {
+        status: "error",
+        error:
+          "INIT_TIMEOUT: Chrome / WhatsApp Web did not load in time. " +
+          "The server is probably too slow or out of memory (Chrome needs about 1 GB RAM). Click Retry or use a bigger instance.",
+      },
+      { retry: true }
+    );
 
     log("INITIALIZING WHATSAPP:", deviceId);
 
@@ -667,7 +892,12 @@ async function createDevice(deviceId) {
       const raw = String(error.message || error).slice(0, 700);
       const message = /^[A-Z_]{4,}:/.test(raw) ? raw : `INITIALIZE_ERROR: ${raw}`;
 
-      failDevice(deviceId, { status: "error", error: message });
+      // Chrome failed to start / page failed to load: try again by itself before showing an error
+      const retryable = client !== null && !/^(CHROME_|MAX_DEVICES|INVALID_)/.test(message);
+
+      if (!(retryable && scheduleRetry(deviceId, message))) {
+        failDevice(deviceId, { status: "error", error: message });
+      }
     }
 
     throw error;
@@ -682,7 +912,7 @@ async function createDevice(deviceId) {
 ========================================================= */
 
 app.get("/", (req, res) => {
-  res.json({ status: "ok", node: NODE_ID });
+  res.json({ status: "ok", node: NODE_ID, app: "/app" });
 });
 
 
@@ -715,6 +945,11 @@ app.get("/health", async (req, res) => {
     chromeExists: Boolean(chromePath),
     chromeInstalling: Boolean(chromeInstallPromise),
     chromeAutoInstall: CHROME_AUTO_INSTALL,
+    memoryMB: {
+      rss: Math.round(process.memoryUsage().rss / 1048576),
+      systemFree: Math.round(os.freemem() / 1048576),
+      systemTotal: Math.round(os.totalmem() / 1048576),
+    },
     devices: list,
     totalDevices: clients.size,
     maxDevices: MAX_DEVICES,
@@ -744,7 +979,7 @@ app.get("/create-device", (req, res) => {
     return res.status(400).json({ status: "failed", message: "Invalid deviceId" });
   }
 
-  if (clients.has(deviceId) || pending.has(deviceId)) {
+  if (isBusy(deviceId)) {
     const data = getDeviceState(deviceId);
 
     return res.json({
@@ -757,6 +992,9 @@ app.get("/create-device", (req, res) => {
       note: data?.note || "",
     });
   }
+
+  // Fresh manual start: reset the automatic retry counter
+  retryCount.delete(deviceId);
 
   // Runs in the background; its synchronous part already sets the device state
   createDevice(deviceId).catch((error) => {
@@ -1077,7 +1315,7 @@ setInterval(() => {
           status: "error",
           error:
             "BROWSER_CRASHED: Chrome stopped, usually because the server ran out of memory. " +
-            "Click Retry. If it keeps happening, use a bigger Render instance.",
+            "Click Retry. If it keeps happening, use a bigger Render instance (1 GB+).",
         })
       );
     }
@@ -1115,6 +1353,7 @@ app.listen(PORT, "0.0.0.0", async (error) => {
   log(`NODE ID: ${NODE_ID}`);
   log(`MAX DEVICES: ${MAX_DEVICES}`);
   log(`CHROME PATH: ${CHROME_PATH_AT_BOOT || "NOT FOUND"}`);
+  log(`OPEN THE TEST PAGE: /app`);
   log("========================================");
 
   await restoreSessions();
