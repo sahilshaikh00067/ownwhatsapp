@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useRef, useCallback, useMemo, memo } from "react";
+import { panelAuthHeaders } from "../../utils/panelAuth";
 import { useNavigate } from "react-router-dom";
 import { FaCalendarDays, FaArrowLeft, FaRotate, FaDownload, FaPlus, FaMinus, FaFilePdf } from "react-icons/fa6";
 
@@ -225,7 +226,7 @@ const WappCampaignActivity = () => {
   const loadReports = useCallback(async () => {
     try {
       const userId = getUserId();
-      const res = await fetch(`${API_DJANGO}/api/get-campaigns/?user_id=${userId}`);
+      const res = await fetch(`${API_DJANGO}/api/get-campaigns/?user_id=${userId}`, { headers: panelAuthHeaders() });
       const data = await res.json();
 
       const list = Array.isArray(data) ? data : [];

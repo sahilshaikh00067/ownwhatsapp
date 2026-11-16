@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
+import { panelAuthHeaders } from "../utils/panelAuth";
 
 // ── MODAL COMPONENT ───────────────────────────
 function Modal({ modal, onClose }) {
@@ -88,17 +89,17 @@ const CreditManage = () => {
 
   const loggedUser = JSON.parse(sessionStorage.getItem("user"));
 
-  const loadUsers = async () => {
+  const loadUsers = useCallback(async () => {
     try {
-      const res  = await fetch(`https://ownwhatsapp-backend-django.onrender.com/api/get-users/?user_id=${loggedUser?.id}`);
+      const res  = await fetch(`https://ownwhatsapp-backend-django.onrender.com/api/get-users/?user_id=${loggedUser?.id}`, { headers: panelAuthHeaders() });
       const data = await res.json();
       setUsers(Array.isArray(data) ? data : []);
     } catch (err) {
       console.log(err);
     }
-  };
+  }, [loggedUser?.id]);
 
-  useEffect(() => { loadUsers(); }, []);
+  useEffect(() => { loadUsers(); }, [loadUsers]);
 
   const handleSubmit = async () => {
     if (!selectedUser || !credit) {
@@ -111,7 +112,7 @@ const CreditManage = () => {
     try {
       const res = await fetch("https://ownwhatsapp-backend-django.onrender.com/api/update-user/", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: panelAuthHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           user_id: user.id,
           credit: Number(user.credit || 0) + Number(credit),

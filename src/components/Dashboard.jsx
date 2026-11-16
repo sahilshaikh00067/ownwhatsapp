@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback, useMemo, useRef, memo } from "react";
+import { panelAuthHeaders } from "../utils/panelAuth";
 import {
   ResponsiveContainer,
   LineChart,
@@ -168,12 +169,12 @@ const Progress = memo(({ value }) => (
   </div>
 ));
 
-const StatCard = memo(({ icon: Icon, danger, children, meta, progress }) => (
+const StatCard = memo(({ icon, danger, children, meta, progress }) => (
   <div className={"wd-card wd-stat" + (danger ? " danger" : "")}>
     <div className="wd-card-body">
       <div className="wd-row">
         <div className="wd-vals">{children}</div>
-        <div className="wd-icon"><Icon /></div>
+        <div className="wd-icon">{React.createElement(icon)}</div>
       </div>
       <Meta>{meta}</Meta>
       <Progress value={progress} />
@@ -188,13 +189,13 @@ const Val = ({ value, label }) => (
   </div>
 );
 
-const PeriodCard = memo(({ icon: Icon, title, data }) => {
+const PeriodCard = memo(({ icon, title, data }) => {
   const rate = pct(data.success, data.total);
   return (
     <div className="wd-card wd-stat">
       <div className="wd-card-body">
         <div className="wd-cat-head">
-          <div className="wd-icon sm"><Icon /></div>
+          <div className="wd-icon sm">{React.createElement(icon)}</div>
           <h6 className="wd-cat-title">{title}</h6>
         </div>
         <div className="wd-cat-vals">
@@ -237,7 +238,7 @@ const Dashboard = () => {
   const loadData = useCallback(async () => {
     try {
       const userId = sessionStorage.getItem("user_id");
-      const res    = await fetch(`${API}/api/get-campaigns/?user_id=${userId}`);
+      const res    = await fetch(`${API}/api/get-campaigns/?user_id=${userId}`, { headers: panelAuthHeaders() });
       const data   = await res.json();
       setRecords(Array.isArray(data) ? data.filter((r) => r.created_at) : []);
     } catch (err) {

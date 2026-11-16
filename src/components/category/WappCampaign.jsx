@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useEffect, useMemo, useRef, memo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useDropzone } from "react-dropzone";
+import { panelAuthHeaders } from "../../utils/panelAuth";
 import {
   FaBullhorn,
   FaTableList,
@@ -49,6 +50,8 @@ import {
 // ─────────────────────────────────────────────
 const API_NODE = "https://ownwhatsapp-backend.onrender.com";
 const API_DJANGO = "https://ownwhatsapp-backend-django.onrender.com";
+// The deployed bulk route and its user-to-device/media contract are unverified.
+const BULK_CAMPAIGN_DISPATCH_ENABLED = false;
 const QUEUE_THRESHOLD = 20; // 🔥 numbers above this go to "pending" queue (non-admin)
 const MAX_NUMBERS = 5000; // design wali limit: "Max 5,000 allowed"  (badalna ho to yahin)
 const BLACKLIST_KEY = "wapp_blacklist"; // localStorage me 10-digit numbers ka array
@@ -152,43 +155,46 @@ function useObjectUrls(files) {
 // doesn't care that form state has already been cleared. Talks to
 // the report screen purely via window events.
 // ─────────────────────────────────────────────
-async function runCampaignInBackground({ numberList, images, video, pdf, message, user, isLarge }) {
+async function runCampaignInBackground({ numberList, images, video, pdf, message, user }) {
+  if (!BULK_CAMPAIGN_DISPATCH_ENABLED) return;
+  let campaignId = null;
   try {
     const filesData = buildFilesData(images, video, pdf);
-    let campaignId = null;
 
-    // ── STEP 1: For large batches, pre-save as "pending" ──
-    if (isLarge) {
-      const pendingData = await safeFetch(`${API_DJANGO}/api/send-whatsapp/`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          results: numberList.map((n) => ({ number: n, status: "pending", files: filesData })),
-          message,
-          total: numberList.length,
-          user_id: user.id,
-          status: "pending",
-        }),
-      });
+    // Reserve credit and establish campaign ownership before the Node sender
+    // can produce any WhatsApp side effect, for both small and queued batches.
+    const pendingData = await safeFetch(`${API_DJANGO}/api/send-whatsapp/`, {
+      method: "POST",
+      headers: panelAuthHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        results: numberList.map((n) => ({ number: n, status: "pending", files: filesData })),
+        message,
+        total: numberList.length,
+        user_id: user.id,
+        status: "pending",
+      }),
+    });
 
-      if (pendingData.status === "failed") {
-        console.error("Campaign pre-save failed:", pendingData.message);
-        return;
-      }
-
-      campaignId = pendingData.campaign_id || null;
-
-      if (pendingData.remaining_credit !== undefined) {
-        sessionStorage.setItem("user", JSON.stringify({ ...user, credit: pendingData.remaining_credit }));
-        window.dispatchEvent(new Event("creditUpdated"));
-      }
-
-      // Pending row now exists — let the Report tab pick it up immediately.
-      window.dispatchEvent(new Event("campaignUpdated"));
-
-      // 🔥 Fall through to Node call below — Node sends the admin
-      // WhatsApp alert + schedules 25-35 min auto-complete.
+    if (pendingData.status === "failed") {
+      console.error("Campaign pre-save failed:", pendingData.message);
+      return;
     }
+
+    campaignId = pendingData.campaign_id || null;
+    if (!campaignId) {
+      console.error("Campaign reservation did not return an ID.");
+      return;
+    }
+
+    if (pendingData.remaining_credit !== undefined) {
+      sessionStorage.setItem("user", JSON.stringify({ ...user, credit: pendingData.remaining_credit }));
+      window.dispatchEvent(new Event("creditUpdated"));
+    }
+
+    // Pending row now exists — let the Report tab pick it up immediately.
+    window.dispatchEvent(new Event("campaignUpdated"));
+
+    // Node sends only after the authenticated Django reservation succeeds.
 
     // ── STEP 2: Send to Node (handles the real WhatsApp sending) ──
     const formData = new FormData();
@@ -205,43 +211,17 @@ async function runCampaignInBackground({ numberList, images, video, pdf, message
 
     if (data.status === "blocked" || data.status === "no_device") {
       console.error("Campaign failed:", data.status, data.message);
+      // The browser cannot attest to a Node result or release reserved credit.
+      // The Node service must post a signed definitive failure callback.
+      window.dispatchEvent(new Event("campaignUpdated"));
       return;
     }
     if (data.status === "Pending" || data.status === "approval_pending") {
       window.dispatchEvent(new Event("campaignUpdated"));
       return;
     }
-    if (!user?.id) {
-      console.error("Session missing — could not save completed campaign.");
-      return;
-    }
-
-    // ── STEP 3: Save completed campaign to Django ──
-    const updatedResults = (data.results || []).map((r) => ({ ...r, files: filesData }));
-
-    const saveData = await safeFetch(`${API_DJANGO}/api/send-whatsapp/`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        results: updatedResults,
-        message,
-        total: data.total || numberList.length,
-        user_id: user.id,
-        status: "completed",
-      }),
-    });
-
-    if (saveData.status === "failed") {
-      console.error("Campaign save failed:", saveData.message);
-      return;
-    }
-
-    if (saveData.remaining_credit !== undefined) {
-      sessionStorage.setItem("user", JSON.stringify({ ...user, credit: saveData.remaining_credit }));
-    }
-
+    // Completion is persisted only by Node's authenticated server callback.
     window.dispatchEvent(new Event("campaignUpdated"));
-    window.dispatchEvent(new Event("creditUpdated"));
   } catch (err) {
     console.error("BACKGROUND SEND ERROR:", err);
   }
@@ -277,7 +257,7 @@ const Modal = memo(({ modal, onClose }) => {
 // ─────────────────────────────────────────────
 // UPLOAD BOX
 // ─────────────────────────────────────────────
-const UploadBox = memo(({ title, hint, type, icon: Icon, images, video, pdf, setImages, setVideo, setPdf }) => {
+const UploadBox = memo(({ title, hint, type, icon, images, video, pdf, setImages, setVideo, setPdf }) => {
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     accept:
       type === "image" ? { "image/*": [] }
@@ -300,7 +280,7 @@ const UploadBox = memo(({ title, hint, type, icon: Icon, images, video, pdf, set
 
   return (
     <div className="wc-up">
-      <div className="wc-up-head"><Icon /> {title}</div>
+      <div className="wc-up-head">{React.createElement(icon)} {title}</div>
       <div {...getRootProps()} className={"wc-drop" + (isDragActive ? " drag" : "")}>
         <input {...getInputProps()} />
         {type === "image" && images.length > 0 ? (
@@ -505,6 +485,11 @@ export default function WappCampaign() {
   // Fires instantly: shows the "message will be sent" popup, clears the
   // form right away, then kicks off the real send in the background.
   const confirmSend = useCallback(() => {
+    if (!BULK_CAMPAIGN_DISPATCH_ENABLED) {
+      setShowConfirm(false);
+      showModal("error", "Campaign Sending Unavailable", "Bulk WhatsApp dispatch is disabled until the verified sender, device ownership, and media contract are configured.");
+      return;
+    }
     if (!numberList.length) {
       setShowConfirm(false);
       showModal("error", "No Numbers!", "Please enter at least one number.");

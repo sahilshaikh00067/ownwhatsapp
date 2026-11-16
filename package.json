@@ -35,7 +35,6 @@
     "react-router-dom": "^7.4.1",
     "recharts": "^3.8.1",
     "tailwindcss": "^4.0.17",
-    "yum": "^0.1.1",
     "yup": "^1.6.1"
   },
   "devDependencies": {

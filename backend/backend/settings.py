@@ -208,6 +208,32 @@ USE_I18N = True
 
 USE_TZ = True
 
+# Login throttling is scoped only to the login endpoint. The custom throttle
+# stores keyed IP digests in the application database, so limits are shared by
+# all web workers without persisting raw IP addresses.
+_trusted_proxy_count = os.environ.get("PANEL_TRUSTED_PROXY_COUNT", "").strip()
+if _trusted_proxy_count:
+    try:
+        _trusted_proxy_count = int(_trusted_proxy_count)
+    except ValueError as exc:
+        raise ValueError("PANEL_TRUSTED_PROXY_COUNT must be a non-negative integer") from exc
+    if _trusted_proxy_count < 0:
+        raise ValueError("PANEL_TRUSTED_PROXY_COUNT must be a non-negative integer")
+else:
+    _trusted_proxy_count = None
+
+REST_FRAMEWORK = {
+    "DEFAULT_THROTTLE_RATES": {
+        "login": os.environ.get("PANEL_LOGIN_RATE", "20/min"),
+    },
+    # If unset, DRF uses REMOTE_ADDR. Set this only after verifying how many
+    # trusted proxies sanitize/append X-Forwarded-For in the production chain.
+    "NUM_PROXIES": _trusted_proxy_count,
+}
+
+# Fail closed until a verified Node bulk sender and callback are deployed.
+CAMPAIGN_DISPATCH_ENABLED = False
+
 # =========================================================
 
 # STATIC FILES
