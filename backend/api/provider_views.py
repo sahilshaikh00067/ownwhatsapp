@@ -20,6 +20,7 @@ from rest_framework.parsers import JSONParser, MultiPartParser, FormParser
 from rest_framework.response import Response
 
 from .models import ProviderApiAudit, ProviderSyncState, ProviderTemplateCache, ProviderWebhookEvent, User
+from .panel_tokens import load_panel_user
 
 DEFAULT_PROVIDER_BASE_URL = "https://wbbox.infrainfotech.com"
 PROVIDER_TIMEOUT_SECONDS = 25
@@ -36,8 +37,7 @@ def _panel_user(request):
         return None, Response({"error": "Panel authentication required."}, status=401)
     try:
         max_age = max(60, int(os.environ.get("PANEL_TOKEN_MAX_AGE", "86400")))
-        payload = signing.loads(token, salt="provider-panel-session", max_age=max_age)
-        user = User.objects.get(pk=payload.get("user_id"), status="Active")
+        user = load_panel_user(token, max_age)
     except (signing.BadSignature, signing.SignatureExpired, User.DoesNotExist, TypeError, ValueError):
         return None, Response({"error": "Panel session expired or invalid."}, status=401)
     return user, None

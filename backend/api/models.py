@@ -29,6 +29,7 @@ class User(models.Model):
     )
     credit = models.IntegerField(default=0)
     status = models.CharField(max_length=10, default="Active")
+    token_version = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def save(self, *args, **kwargs):
@@ -161,6 +162,9 @@ class Campaign(models.Model):
         default="completed"
     )
 
+    # Set while a non-admin campaign's credits are reserved for dispatch.
+    credit_reserved = models.BooleanField(default=False)
+
     created_at = models.DateTimeField(
         auto_now_add=True
     )
@@ -172,6 +176,42 @@ class Campaign(models.Model):
             f"{self.user.username} - "
             f"{self.status}"
         )
+
+
+class CampaignCallbackEvent(models.Model):
+    """Idempotency receipt for a trusted Node campaign outcome callback."""
+
+    STATUS_CHOICES = (
+        ("completed", "Completed"),
+        ("failed", "Failed"),
+        ("unknown", "Unknown"),
+    )
+
+    campaign = models.ForeignKey(
+        Campaign,
+        on_delete=models.CASCADE,
+        related_name="callback_events",
+    )
+    event_id = models.CharField(max_length=128, unique=True)
+    payload_hash = models.CharField(max_length=64)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["campaign", "created_at"])]
+
+    def __str__(self):
+        return f"Campaign {self.campaign_id}: {self.status} ({self.event_id})"
+
+
+class PanelLoginThrottle(models.Model):
+    """Database-backed login throttle bucket keyed by a keyed IP digest."""
+
+    key_digest = models.CharField(max_length=64, primary_key=True)
+    window_started_at = models.DateTimeField()
+    attempts = models.PositiveIntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
 
 
 class ProviderSyncState(models.Model):
@@ -239,4 +279,3 @@ class ProviderApiAudit(models.Model):
 
     def __str__(self):
         return f"{self.operation} ({self.status_code or 'not sent'})"
-

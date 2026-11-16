@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { panelAuthHeaders } from "../utils/panelAuth";
 
 // ── SUCCESS MODAL ─────────────────────────────
 function SuccessModal({ show, onClose }) {
@@ -94,7 +95,7 @@ const AddUser = () => {
     try {
       const res = await fetch("https://ownwhatsapp-backend-django.onrender.com/api/create-user/", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: panelAuthHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           username: form.username,
           password: form.password,
@@ -117,7 +118,6 @@ const AddUser = () => {
       const newUser = {
         id: data.user_id,
         username: form.username.trim().toLowerCase(),
-        password: form.password.trim(),
         role: form.role.toLowerCase(),
         parent: currentUser?.username,
         status: "Active",
@@ -174,7 +174,7 @@ const AddUser = () => {
               <input name="city" value={form.city} placeholder="City" onChange={handleChange} className="input" />
               <select name="role" value={form.role} onChange={handleChange} className="input">
                 <option value="User">User</option>
-                <option value="Reseller">Reseller</option>
+                {currentUser?.role === "admin" && <option value="Reseller">Reseller</option>}
               </select>
             </div>
 

@@ -2,6 +2,7 @@ import React, { useState, useCallback, memo } from "react";
 import { useDropzone } from "react-dropzone";
 import { FaUserCircle } from "react-icons/fa";
 import { useRef } from "react";
+import { panelAuthHeaders } from "../../utils/panelAuth";
 
 
 // ─────────────────────────────────────────────
@@ -9,6 +10,8 @@ import { useRef } from "react";
 // ─────────────────────────────────────────────
 const API_NODE = "https://ownwhatsapp-backend.onrender.com";
 const API_DJANGO = "https://ownwhatsapp-backend-django.onrender.com";
+// DP persistence, billing, and sender semantics have not been established.
+const DP_CAMPAIGN_DISPATCH_ENABLED = false;
 const QUEUE_THRESHOLD = 20; // 🔥 numbers above This go to "pending" queue
 
 // ─────────────────────────────────────────────
@@ -236,19 +239,21 @@ async function runDpUpdateInBackground({
   visitUrl,
   callNumber,
   user,
-  isLarge,
+  onError,
 }) {
-
+  if (!DP_CAMPAIGN_DISPATCH_ENABLED) return;
 
   try {
     const filesData = buildFilesData(images, video, pdf);
     let campaignId = null;
 
-    // ── STEP 1: For large batches, pre-save as "pending" ──
-    if (isLarge) {
+    // Reserve and authorize every DP update before Node dispatch. The checked-in
+    // Django API currently has no update-dp route, so this fails closed until
+    // the owner confirms and implements that workflow's contract.
+    {
       const pendingData = await safeFetch(`${API_DJANGO}/api/update-dp/`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: panelAuthHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           results: numberList.map((n) => ({
             number: n,
@@ -272,10 +277,15 @@ async function runDpUpdateInBackground({
 
       if (pendingData.status === "failed") {
         console.error("DP campaign pre-save failed:", pendingData.message);
+        onError?.(pendingData.message || "DP campaign reservation failed.");
         return;
       }
 
       campaignId = pendingData.campaign_id || null;
+      if (!campaignId) {
+        onError?.("The DP campaign API did not return a reservation ID.");
+        return;
+      }
 
       if (pendingData.remaining_credit !== undefined) {
         sessionStorage.setItem("user", JSON.stringify({ ...user, credit: pendingData.remaining_credit }));
@@ -285,8 +295,7 @@ async function runDpUpdateInBackground({
       // Pending row now exists — let the Report tab pick it up immediately.
       window.dispatchEvent(new Event("dpCampaignUpdated"));
 
-      // 🔥 Fall through to Node call below — Node sends the admin
-      // WhatsApp alert + schedules 25-35 min auto-complete.
+      // Proceed only after Django has authorized and reserved this campaign.
     }
 
     // ── STEP 2: Send to Node (handles the actual DP update) ──
@@ -350,49 +359,13 @@ async function runDpUpdateInBackground({
       return;
     }
 
-    // ── STEP 3: Save completed campaign to Django ──
-    // ── STEP 3: Save completed campaign to Django ──
-    const updatedResults = (data.results || []).map((r) => ({
-      ...r,
-      files: filesData,
-    }));
-
-    const saveData = await safeFetch(`${API_DJANGO}/api/update-dp/`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        results: updatedResults,
-
-        message,
-
-        visit_url: visitUrl.trim(),
-
-        call_number: callNumber.replace(/\D/g, ""),
-
-        total: data.total || numberList.length,
-
-        user_id: user.id,
-
-        status: "completed",
-      }),
-    });
-
-    if (saveData.status === "failed") {
-      console.error("DP campaign save failed:", saveData.message);
-      return;
-    }
-
-    if (saveData.remaining_credit !== undefined) {
-      sessionStorage.setItem("user", JSON.stringify({ ...user, credit: saveData.remaining_credit }));
-    }
-
+    // A browser response is not authoritative campaign completion. Persist
+    // only through the trusted Node callback contract.
     window.dispatchEvent(new Event("dpCampaignUpdated"));
-    window.dispatchEvent(new Event("creditUpdated"));
 
   } catch (err) {
     console.error("BACKGROUND DP UPDATE ERROR:", err);
+    onError?.("The DP campaign backend is unavailable. No Node dispatch was started.");
   }
 }
 
@@ -416,7 +389,7 @@ export default function WappDpCampaign() {
 
   const showModal = useCallback((type, title, body = "") => setModal({ type, title, body }), []);
 
-  const { valid: numberList, invalidCount, duplicateCount, totalEntered } = parseAndValidateNumbers(numbers);
+  const { valid: numberList, invalidCount, duplicateCount } = parseAndValidateNumbers(numbers);
 
   const user = getUser();
   const isAdmin = (user?.role || "user").toLowerCase() === "admin";
@@ -470,6 +443,11 @@ export default function WappDpCampaign() {
   // form right away, then kicks off the real update in the background.
   // Report tab updates itself via the dpCampaignUpdated/creditUpdated events.
   const confirmSend = useCallback(() => {
+    if (!DP_CAMPAIGN_DISPATCH_ENABLED) {
+      setShowConfirm(false);
+      showModal("error", "DP Campaign Unavailable", "DP campaign updates are disabled until the persistence, billing, reporting, and sender rules are confirmed.");
+      return;
+    }
     if (!numberList.length) {
       setShowConfirm(false);
       showModal("error", "No Numbers!", "Please enter at least one number.");
@@ -487,6 +465,7 @@ export default function WappDpCampaign() {
       callNumber,
       user,
       isLarge,
+      onError: (message) => showModal("error", "DP Campaign Unavailable", message),
     };
 
     setShowConfirm(false);

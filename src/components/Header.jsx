@@ -1,4 +1,5 @@
 import { NavLink, Link, useNavigate, Outlet } from "react-router-dom";
+import { panelAuthHeaders } from "../utils/panelAuth";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { Dialog, DialogPanel } from "@headlessui/react";
 import { Bars3Icon, XMarkIcon } from "@heroicons/react/24/outline";
@@ -170,7 +171,7 @@ export default function Header() {
       if (!stored?.id) return;
 
       try {
-        const res = await fetch(`${API}/api/get-user/?user_id=${stored.id}`);
+        const res = await fetch(`${API}/api/get-user/?user_id=${stored.id}`, { headers: panelAuthHeaders() });
 
         const data = await res.json();
 
@@ -412,4 +413,3 @@ export default function Header() {
     </div>
   );
 }
-

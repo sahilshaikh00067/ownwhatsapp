@@ -18,6 +18,7 @@ urlpatterns = [
 
     # 📲 CAMPAIGN
     path("send-whatsapp/", views.send_whatsapp),
+    path("campaigns/callback/", views.campaign_callback),
     path("get-credit-logs/", views.get_credit_logs),
     path("get-campaigns/", views.get_campaigns),
     path("get-user/", views.get_user),
@@ -36,4 +37,3 @@ urlpatterns = [
     path("provider/meta/messages/", provider_views.provider_meta_message),
     path("provider/meta/media/", provider_views.provider_meta_media),
 ]
-

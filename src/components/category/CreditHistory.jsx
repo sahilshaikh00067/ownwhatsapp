@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Calendar } from "lucide-react";
+import { panelAuthHeaders } from "../../utils/panelAuth";
 
 const CreditHistory = () => {
   const [data, setData] = useState([]);
@@ -26,7 +27,8 @@ useEffect(() => {
       const user = JSON.parse(sessionStorage.getItem("user"));
 
       const res = await fetch(
-        `https://ownwhatsapp-backend-django.onrender.com/api/get-credit-logs/?user_id=${user.id}`
+        `https://ownwhatsapp-backend-django.onrender.com/api/get-credit-logs/?user_id=${user.id}`,
+        { headers: panelAuthHeaders() }
       );
 
       const data = await res.json();

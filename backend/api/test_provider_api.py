@@ -15,7 +15,7 @@ from .models import ProviderApiAudit, ProviderSyncState, ProviderTemplateCache, 
 class ProviderApiTests(APITestCase):
     def setUp(self):
         self.user = User.objects.create(username="api-tester", password="secret", status="Active", role="admin")
-        self.token = signing.dumps({"user_id": self.user.id}, salt="provider-panel-session")
+        self.token = signing.dumps({"user_id": self.user.id, "token_version": self.user.token_version}, salt="provider-panel-session")
         self.auth = {"HTTP_AUTHORIZATION": f"Bearer {self.token}"}
         self.env = patch.dict(os.environ, {
             "WBOX_API_BASE_URL": "https://provider.example",
@@ -181,7 +181,7 @@ class ProviderApiTests(APITestCase):
     def test_non_admin_cannot_trigger_provider_side_effects(self):
         self.user.role = "user"
         self.user.save(update_fields=["role"])
-        self.token = signing.dumps({"user_id": self.user.id}, salt="provider-panel-session")
+        self.token = signing.dumps({"user_id": self.user.id, "token_version": self.user.token_version}, salt="provider-panel-session")
         self.auth = {"HTTP_AUTHORIZATION": f"Bearer {self.token}"}
         with patch("api.provider_views.requests.request") as fake_request:
             response = self.client.post("/api/provider/meta/messages/", {
@@ -193,7 +193,7 @@ class ProviderApiTests(APITestCase):
     def test_non_admin_cannot_read_shared_provider_account_data(self):
         self.user.role = "user"
         self.user.save(update_fields=["role"])
-        self.token = signing.dumps({"user_id": self.user.id}, salt="provider-panel-session")
+        self.token = signing.dumps({"user_id": self.user.id, "token_version": self.user.token_version}, salt="provider-panel-session")
         self.auth = {"HTTP_AUTHORIZATION": f"Bearer {self.token}"}
         with patch("api.provider_views.requests.request") as fake_request:
             status = self.client.get("/api/provider/status/", **self.auth)

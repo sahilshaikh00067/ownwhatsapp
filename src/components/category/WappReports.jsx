@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useRef, useCallback, memo } from "react";
+import { panelAuthHeaders } from "../../utils/panelAuth";
 import { Calendar } from "lucide-react";
 
 // ─────────────────────────────────────────────
@@ -234,7 +235,7 @@ const WappReports = () => {
   const loadReports = useCallback(async () => {
     try {
       const userId = getUserId();
-      const res = await fetch(`${API_DJANGO}/api/get-campaigns/?user_id=${userId}`);
+      const res = await fetch(`${API_DJANGO}/api/get-campaigns/?user_id=${userId}`, { headers: panelAuthHeaders() });
       const data = await res.json();
 
       const filtered = data.filter(r => passesFilter(r.created_at, selectedFilter));
