@@ -435,8 +435,6 @@ export default function Login() {
 
       try {
         const data = await loginRequest({ username: trimUser, password: trimPass });
-        console.log("Login response:", data);
-
         if (data && (data.status === "success" || data.success === true)) {
           sessionStorage.clear();
           sessionStorage.setItem("user_id", String(data.user_id || data.id || ""));
@@ -448,6 +446,7 @@ export default function Login() {
               username: trimUser,
               role: data.role || "user",
               credit: data.credit || 0,
+              panelToken: data.panel_token || "",
             })
           );
           setMessage("Login successful ✅");
@@ -707,3 +706,4 @@ export default function Login() {
     </div>
   );
 }
+

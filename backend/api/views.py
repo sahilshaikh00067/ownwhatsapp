@@ -6,6 +6,10 @@ Django REST API — Production Grade
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from django.db import transaction
+from django.core import signing
+from django.contrib.auth.hashers import check_password, make_password
+from django.utils.crypto import constant_time_compare
+import os
 from .models import User, Campaign, CreditLog
 
 
@@ -132,8 +136,6 @@ def _credit_log(user, service, credit, credit_type, old_credit, notes, results=N
 @api_view(["POST"])
 def login(request):
     try:
-        print("LOGIN REQUEST DATA:", request.data)
-
         username = str(
             request.data.get("username", "")
         ).strip().lower()
@@ -141,8 +143,6 @@ def login(request):
         password = str(
             request.data.get("password", "")
         ).strip()
-
-        print("LOGIN USERNAME:", username)
 
         if not username or not password:
             return Response({
@@ -154,19 +154,20 @@ def login(request):
             username__iexact=username
         ).first()
 
-        print("LOGIN USER FOUND:", user)
-
         if user is None:
             return Response({
                 "status": "failed",
                 "message": "Invalid username or password ❌"
             })
 
-        print("DATABASE USERNAME:", user.username)
-        print("DATABASE PASSWORD:", user.password)
-        print("DATABASE STATUS:", user.status)
+        authenticated = check_password(password, user.password)
+        if not authenticated and str(user.password).strip() == password:
+            # Upgrade legacy plaintext credentials after successful login.
+            user.password = make_password(password)
+            user.save(update_fields=["password"])
+            authenticated = True
 
-        if str(user.password).strip() != password:
+        if not authenticated:
             return Response({
                 "status": "failed",
                 "message": "Invalid username or password ❌"
@@ -184,42 +185,52 @@ def login(request):
             "username": user.username,
             "role": user.role,
             "credit": user.credit,
+            "panel_token": signing.dumps(
+                {"user_id": user.id},
+                salt="provider-panel-session",
+            ),
+            "panel_token_max_age": int(os.environ.get("PANEL_TOKEN_MAX_AGE", "86400")),
         })
 
-    except Exception as e:
-        print("LOGIN ERROR:", repr(e))
-
+    except Exception:
         return Response({
             "status": "error",
-            "message": str(e)
+            "message": "Unable to complete login."
         })
 
 
 
-@api_view(["GET"])
+@api_view(["POST"])
 def setup_admin(request):
-    secret = request.GET.get("secret")
-
-    if secret != "OWNWHATSAPP_SETUP_2026":
+    setup_token = os.environ.get("ADMIN_SETUP_TOKEN", "").strip()
+    initial_password = os.environ.get("ADMIN_SETUP_PASSWORD", "")
+    if not setup_token or not initial_password:
         return Response(
-            {"status": "failed", "message": "Unauthorized"},
-            status=403
+            {"status": "failed", "message": "Admin bootstrap is not configured."},
+            status=503,
         )
-    
-    user, created = User.objects.update_or_create(
-        username="admin",
-        defaults={
-            "password": "admin",
-            "role": "admin",
-            "credit": 999999,
-            "status": "Active",
-        }
+
+    scheme, _, supplied_token = request.headers.get("Authorization", "").partition(" ")
+    if scheme.lower() != "bearer" or not constant_time_compare(setup_token, supplied_token):
+        return Response({"status": "failed", "message": "Unauthorized"}, status=403)
+
+    username = os.environ.get("ADMIN_SETUP_USERNAME", "admin").strip().lower()
+    if not username or User.objects.filter(username__iexact=username).exists():
+        return Response(
+            {"status": "failed", "message": "Admin already exists or username is invalid."},
+            status=409,
+        )
+
+    user = User.objects.create(
+        username=username,
+        password=make_password(initial_password),
+        role="admin",
+        credit=999999,
+        status="Active",
     )
-    
     return Response({
         "status": "success",
         "message": "Admin created successfully",
-        "created": created,
         "username": user.username,
         "role": user.role,
     })
@@ -258,7 +269,7 @@ def create_user(request):
 
         user = User.objects.create(
             username = username,
-            password = password,
+            password = make_password(password),
             role     = role,
             parent   = parent,
             credit   = 0,
@@ -335,7 +346,8 @@ def update_user(request):
 
         # ── Field updates ──
         user.username = str(request.data.get("username", user.username)).strip().lower()
-        user.password = str(request.data.get("password", user.password)).strip()
+        if request.data.get("password"):
+            user.password = make_password(str(request.data.get("password")).strip())
         user.role     = request.data.get("role",   user.role)
         user.status   = request.data.get("status", user.status)
 
@@ -437,7 +449,7 @@ def reset_password(request):
         if not new_password:
             return Response({"status": "failed", "message": "Password cannot be empty"})
 
-        user.password = new_password
+        user.password = make_password(new_password)
         user.save(update_fields=["password"])
         return Response({"status": "success"})
 
@@ -649,3 +661,4 @@ def get_campaigns(request):
     except Exception as e:
         print("GET CAMPAIGN ERROR:", e)
         return Response([])
+

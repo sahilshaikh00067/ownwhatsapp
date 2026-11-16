@@ -172,3 +172,71 @@ class Campaign(models.Model):
             f"{self.user.username} - "
             f"{self.status}"
         )
+
+
+class ProviderSyncState(models.Model):
+    """Most recent provider sync result, without storing provider credentials."""
+
+    name = models.CharField(max_length=80, unique=True)
+    status = models.CharField(max_length=20, default="pending")
+    last_synced_at = models.DateTimeField(null=True, blank=True)
+    safe_message = models.CharField(max_length=240, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.name}: {self.status}"
+
+
+class ProviderTemplateCache(models.Model):
+    """Latest safe copy of provider template metadata for panel browsing."""
+
+    external_id = models.CharField(max_length=160, unique=True)
+    template_id = models.CharField(max_length=160, blank=True)
+    name = models.CharField(max_length=255)
+    language = models.CharField(max_length=32, blank=True)
+    category_name = models.CharField(max_length=80, blank=True)
+    state = models.CharField(max_length=40, blank=True)
+    content = models.JSONField(default=dict, blank=True)
+    provider_created_at = models.CharField(max_length=64, blank=True)
+    provider_updated_at = models.CharField(max_length=64, blank=True)
+    synced_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["name"]), models.Index(fields=["state"])]
+
+    def __str__(self):
+        return self.name
+
+
+class ProviderWebhookEvent(models.Model):
+    """Webhook receipt metadata; message contents and credentials are not stored."""
+
+    event_id = models.CharField(max_length=160, blank=True, db_index=True)
+    event_type = models.CharField(max_length=120, blank=True)
+    received_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.event_type or 'provider_event'} ({self.received_at:%Y-%m-%d %H:%M})"
+
+
+class ProviderApiAudit(models.Model):
+    """Minimal audit metadata for panel initiated provider API calls."""
+
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="provider_api_audits",
+    )
+    operation = models.CharField(max_length=64)
+    method = models.CharField(max_length=10)
+    status_code = models.PositiveSmallIntegerField(null=True, blank=True)
+    succeeded = models.BooleanField(default=False)
+    safe_message = models.CharField(max_length=240, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["user", "-created_at"])]
+
+    def __str__(self):
+        return f"{self.operation} ({self.status_code or 'not sent'})"
+

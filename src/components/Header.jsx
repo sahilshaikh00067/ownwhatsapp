@@ -42,6 +42,7 @@ const links = [
   { text: "Manage User", to: "/manageuser" },
   { text: "Payment", to: "/wapppayment" },
   { text: "API Console", to: "/wappapi" },
+  { text: "API Integrations", to: "/provider-integrations", roles: ["admin"] },
 ];
 
 // Header search me jo pages dikhenge
@@ -58,6 +59,7 @@ const SEARCH_PAGES = [
   { label: "Manage User", sub: "Admin / reseller", to: "/manageuser", icon: FaUsersLine, notRoles: ["user"] },
   { label: "Payment", sub: "Payment gateway configurations & transactions", to: "/wapppayment", icon: FaCreditCard, notRoles: ["user"] },
   { label: "API Console", sub: "WhatsApp API documentation", to: "/wappapi", icon: FaGlobe },
+  { label: "API Integrations", sub: "Wallet, templates, messaging and provider setup", to: "/provider-integrations", icon: FaGlobe, roles: ["admin"] },
 ];
 
 const CSS = `
@@ -230,6 +232,7 @@ export default function Header() {
     { text: "Users", tip: "Manage User", to: "/manageuser", icon: FaUsersLine, show: role !== "user" },
     { text: "Payment", tip: "Payment", to: "/wapppayment", icon: FaCreditCard, show: role !== "user" },
     { text: "API", tip: "Product Api", to: "/wappapi", icon: FaGlobe },
+    { text: "Integrations", tip: "Provider API integrations", to: "/provider-integrations", icon: FaGlobe, show: role === "admin" },
   ].filter((i) => i.show === undefined || i.show);
 
   /* ---------- header search ---------- */
@@ -351,6 +354,7 @@ export default function Header() {
               </NavLink>
               {links
                 .filter((item) => {
+                  if (item.roles && !item.roles.includes(role)) return false;
                   if (
                     (item.to === "/adduser" || item.to === "/manageuser" || item.to === "/wapppayment") &&
                     role === "user"
@@ -408,3 +412,4 @@ export default function Header() {
     </div>
   );
 }
+

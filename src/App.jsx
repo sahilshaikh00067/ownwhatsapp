@@ -36,6 +36,7 @@ import WappPayment from "./components/category/WappPayment";
 
 // 🔥 NEW: API Console (full page, RapiDoc) — sidebar "API" par khulta hai
 import WappApiConsole from "./components/category/WappApiConsole";
+import ProviderIntegrations from "./components/category/ProviderIntegrations";
 
 // Products Home page (login ke baad yahi khulega)
 import ProductsHome from "./components/Productshome";
@@ -78,6 +79,7 @@ function App() {
 
         {/* 🔥 API CONSOLE — poora page (sidebar/header ke bina), jaisa original console */}
         <Route path="/wappapi" element={<WappApiConsole />} />
+          <Route path="/provider-integrations" element={<RoleGate allow={isAdmin}><ProviderIntegrations /></RoleGate>} />
 
         {/* HEADER + SIDEBAR LAYOUT */}
         <Route element={<HomeGate><Header /></HomeGate>}>
@@ -124,3 +126,4 @@ function App() {
 }
 
 export default App;
+
