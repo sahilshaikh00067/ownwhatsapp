@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 
-// ── MODAL COMPONENT ───────────────────────────
+// ── MODAL COMPONENT ───────────────────────
 function Modal({ modal, onClose }) {
   if (!modal) return null;
 

@@ -565,7 +565,7 @@ def send_whatsapp(request):
                 locked_user.save(update_fields=["credit"])
                 user.credit = locked_user.credit   # reflect locally
 
-        # Tally (pending campaigns have 0/0/0 — results not processed yet)
+        # Tally (pending campaigns have 0/0/0 — results not procesed yet)
         if status == "pending":
             sent = 0
             failed = 0
