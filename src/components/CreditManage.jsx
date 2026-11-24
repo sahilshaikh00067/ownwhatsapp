@@ -229,9 +229,9 @@ const CreditManage = () => {
               <thead className="bg-[#2FA4C7] text-white">
                 <tr>
                   <th className="p-3 border-r border-gray-200">ID</th>
-                  <th className="border-r border-gray-300">Username</th>
-                  <th className="border-r border-gray-300">Service</th>
-                  <th className="border-r border-gray-300">Credit</th>
+                  <th className="border-r border-gray-200">Username</th>
+                  <th className="border-r border-gray-200">Service</th>
+                  <th className="border-r border-gray-200">Credit</th>
                   <th>Validity</th>
                 </tr>
               </thead>

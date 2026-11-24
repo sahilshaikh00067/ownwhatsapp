@@ -521,7 +521,7 @@ def send_whatsapp(request):
         total       = int(d.get("total", 0))
         user_id     = d.get("user_id")
         status      = d.get("status", "completed")
-        campaign_id = d.get("campaign_id")          # set only by Node worker callback
+        campaign_id = d.get("campaign_id")          # set only by Node worker callback edit
 
         user, err = _get_user(user_id)
         if err:
@@ -543,7 +543,7 @@ def send_whatsapp(request):
                 campaign.save()
                 return Response({
                     "status":      "ok",
-                    "message":     "Campaign marked completed",
+                    "message":     "Campaign Marked Completed",
                     "campaign_id": campaign.id,
                 })
             except Campaign.DoesNotExist:
